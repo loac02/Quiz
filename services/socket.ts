@@ -1,9 +1,15 @@
 import { io, Socket } from 'socket.io-client';
 
-// Define the backend URL.
-// In development, it defaults to localhost:3001.
-// In production (Vercel/Netlify), you must set the environment variable BACKEND_URL (or VITE_BACKEND_URL)
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
+// Helper to safely get the Backend URL from window.process (injected by env.js) or global process
+// @ts-ignore
+const getBackendUrl = () => {
+  if (typeof window !== 'undefined' && window.process && window.process.env && window.process.env.BACKEND_URL) {
+    return window.process.env.BACKEND_URL;
+  }
+  return process.env.BACKEND_URL || 'http://localhost:3001';
+};
+
+const BACKEND_URL = getBackendUrl();
 
 console.log('Socket connecting to:', BACKEND_URL);
 
