@@ -1,0 +1,5 @@
+{
+  "name": "Quiz dos Craques",
+  "description": "Um jogo de perguntas e respostas sobre esportes competitivo e rápido, alimentado pelo Gemini. Lute contra oponentes de IA em tempo real, gerencie suas sequências e suba na classificação.",
+  "requestFramePermissions": []
+}
