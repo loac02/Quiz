@@ -39,12 +39,20 @@ const App: React.FC = () => {
     setPhase(GamePhase.LOBBY);
   }, []);
 
-  const handleStartGame = useCallback(async (config: GameConfig) => {
+  const handleStartGame = useCallback(async (config: GameConfig, initialPlayers?: Player[]) => {
     // Instead of just setting loading state, we switch to LOADING phase
     // This allows us to render the full Loading Screen
     setPhase(GamePhase.LOADING);
-    setLoading(true); // Keep this if Lobby needs to know, but phase switch usually hides Lobby
+    setLoading(true); 
     setGameConfig(config);
+    
+    // Set initial players (important for Online mode)
+    // If provided, use them. Otherwise, wait for Arena to init solo/bots.
+    if (initialPlayers && initialPlayers.length > 0) {
+        setPlayers(initialPlayers);
+    } else {
+        setPlayers([user]);
+    }
     
     try {
       // Pass empty history for new game
@@ -58,7 +66,7 @@ const App: React.FC = () => {
       setQuestions(generatedQuestions);
       setPhase(GamePhase.PLAYING);
       
-      // Reset user score for new game
+      // Reset user score for new game BUT keep the ID and Name
       setUser(prev => ({ ...prev, score: 0, streak: 0, correctAnswersCount: 0 }));
     } catch (err) {
       console.error(err);
@@ -67,32 +75,24 @@ const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   // Logic to load more questions for infinite modes (Survival)
   const handleLoadMoreQuestions = useCallback(async () => {
      if (loadingMore) return;
      setLoadingMore(true);
      
-     // Calculate stats for context
-     // We use the 'players' state which contains the live updated user data if available, or fallback to 'user'
-     // Note: We access current values via closure or state, but since we need latest players, this might depend on players.
-     // However, for optimization, we accept that 'players' in closure might be slightly stale if not added to dependency, 
-     // but 'user' and 'questions' are the main drivers for context.
-     // To be safe and performant, we use the user state and questions length.
-     
      const recentAccuracy = user.correctAnswersCount > 0 
         ? user.correctAnswersCount / (questions.length || 1) 
         : 0;
 
      try {
-       // Fetch a small batch (e.g., 5) to keep it going
        const newQuestions = await generateQuestions(
          gameConfig.topic,
-         gameConfig.difficulty, // Could increase difficulty here for progression
+         gameConfig.difficulty, 
          5,
          gameConfig.mode,
-         questions.map(q => q.text), // Pass history to prevent duplicates
+         questions.map(q => q.text),
          { 
            streak: user.streak,
            recentAccuracy: recentAccuracy
@@ -118,20 +118,17 @@ const App: React.FC = () => {
   }, []);
 
   const goToHome = useCallback(() => {
-    // Returns to Lobby (Game Selection) instead of Welcome
     setPhase(GamePhase.LOBBY);
     setQuestions([]);
     setPlayers([]);
   }, []);
 
   const handleEditProfile = useCallback(() => {
-    // Open Welcome screen in "Edit Mode"
     setPhase(GamePhase.WELCOME);
   }, []);
 
   return (
     <div className="min-h-screen bg-slate-900 relative">
-      {/* Optimized Background Layer: Separate fixed div is faster than body background-attachment: fixed */}
       <div 
         className="fixed inset-0 z-0 bg-cover bg-center pointer-events-none opacity-40"
         style={{ 
@@ -139,10 +136,7 @@ const App: React.FC = () => {
         }}
       />
       
-      {/* Main Container */}
       <div className="relative z-10 min-h-screen bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
-        
-        {/* Header - Only show if not in Welcome screen (or show in Welcome but disabled? Better hide in Welcome) */}
         {phase !== GamePhase.WELCOME && (
           <header className="h-20 border-b border-white/10 flex items-center px-6 glass-panel sticky top-0 z-50">
             <div className="flex items-center gap-2">
@@ -162,20 +156,16 @@ const App: React.FC = () => {
                 title="Editar Perfil"
                >
                  <img src={user.avatar} className="w-10 h-10 rounded-full border border-white/20 group-hover:border-blue-400 transition-colors" alt="Avatar" />
-                 <div className="absolute inset-0 rounded-full bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <span className="text-[8px] text-white font-bold uppercase">Editar</span>
-                 </div>
                </button>
             </div>
           </header>
         )}
 
-        {/* Content */}
         <main className={phase === GamePhase.WELCOME ? "h-screen flex items-center" : ""}>
           {phase === GamePhase.WELCOME && (
             <Welcome 
               onComplete={handleProfileComplete} 
-              initialPlayer={user.id ? user : undefined} // Pass user only if created
+              initialPlayer={user.id ? user : undefined} 
             />
           )}
 
@@ -195,14 +185,13 @@ const App: React.FC = () => {
             <Arena 
               questions={questions} 
               onGameEnd={handleGameEnd} 
-              // FORCE CLEAN USER: This prevents the bug where old stats persist due to async state updates.
-              // Arena initializes its local player state from this prop immediately.
               currentUser={{
                 ...user,
                 score: 0,
                 streak: 0,
                 correctAnswersCount: 0
               }}
+              initialPlayers={players.length > 1 ? players : undefined} // Pass online players if any
               config={gameConfig}
               onLoadMore={handleLoadMoreQuestions}
             />
