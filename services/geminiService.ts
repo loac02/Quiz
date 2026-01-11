@@ -1,9 +1,20 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Question, Difficulty, GameMode } from "../types";
 
+// Declaração para evitar erro TS2580
+declare const process: any;
+
+// Helper to safely get the API key
+const getApiKey = () => {
+  const win = window as any;
+  if (typeof window !== 'undefined' && win.process && win.process.env && win.process.env.API_KEY) {
+    return win.process.env.API_KEY;
+  }
+  return typeof process !== 'undefined' ? process.env.API_KEY : undefined;
+};
+
 // Initialize Gemini
-// NOTE: API Key is assumed to be in process.env.API_KEY as per instructions.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 interface PlayerContext {
   streak: number;
