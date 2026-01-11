@@ -4,8 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Quiz dos Craques</title>
-    <!-- Carrega as configurações de ambiente (API Key) -->
-    <script src="/env.js"></script>
+    <!-- Configurações de Ambiente Inline (Correção para Build) -->
+    <script>
+      window.process = {
+        env: {
+          API_KEY: "AIzaSyB0sHZVmq8YxAL4ZZZf1HOF6ayqzm7rcpo",
+          BACKEND_URL: "https://quiz-dos-craques.onrender.com"
+        }
+      };
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
@@ -59,9 +66,9 @@
     "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
     "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
     "recharts": "https://esm.sh/recharts@^3.6.0",
+    "socket.io-client": "https://esm.sh/socket.io-client@^4.8.3",
     "vite": "https://esm.sh/vite@^7.3.1",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
-    "socket.io-client": "https://esm.sh/socket.io-client@^4.8.3"
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
 }
 </script>

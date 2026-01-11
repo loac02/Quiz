@@ -4,7 +4,7 @@ import { Question, Difficulty, GameMode } from "../types";
 // Declaração para evitar erro TS2580
 declare const process: any;
 
-// Helper to safely get the API key from window.process (injected by env.js) or global process (build time)
+// Helper to safely get the API key
 const getApiKey = () => {
   const win = window as any;
   if (typeof window !== 'undefined' && win.process && win.process.env && win.process.env.API_KEY) {
@@ -13,8 +13,20 @@ const getApiKey = () => {
   return typeof process !== 'undefined' ? process.env.API_KEY : undefined;
 };
 
-// Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: getApiKey() });
+// Singleton para a instância do Gemini
+let aiInstance: GoogleGenAI | null = null;
+
+const getAiClient = () => {
+  if (!aiInstance) {
+    const key = getApiKey();
+    if (!key) {
+      console.error("API Key is missing!");
+      throw new Error("API Key não encontrada. Verifique as configurações.");
+    }
+    aiInstance = new GoogleGenAI({ apiKey: key });
+  }
+  return aiInstance;
+};
 
 interface PlayerContext {
   streak: number;
@@ -30,6 +42,7 @@ export const generateQuestions = async (
   playerContext?: PlayerContext // Dynamic difficulty adjustment
 ): Promise<Question[]> => {
   try {
+    const ai = getAiClient();
     const model = "gemini-3-flash-preview";
     
     // --- 1. Dynamic Difficulty Logic ---
