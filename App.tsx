@@ -180,7 +180,11 @@ const App: React.FC = () => {
           )}
 
           {phase === GamePhase.LOBBY && (
-            <Lobby onStartGame={handleStartGame} isLoading={loading} />
+            <Lobby 
+              onStartGame={handleStartGame} 
+              isLoading={loading} 
+              currentUser={user}
+            />
           )}
 
           {phase === GamePhase.LOADING && (

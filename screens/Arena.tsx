@@ -177,6 +177,19 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     }
   }, [questions.length, isWaitingForMore, currentQuestionIndex]);
 
+  // AUDIO & VISUAL SYNC: Play sound ONLY when phase changes to Reveal
+  useEffect(() => {
+    if (phase === GamePhase.ROUND_RESULT) {
+      const isCorrect = userPendingUpdate.current?.correct ?? false;
+      
+      // Sync Visuals (Red Border)
+      if (!isCorrect) setWasWrong(true);
+      
+      // Sync Audio
+      AudioController.play(isCorrect ? 'correct' : 'wrong');
+    }
+  }, [phase]);
+
   useEffect(() => {
     return () => {
       if (nextQuestionTimeout.current) clearTimeout(nextQuestionTimeout.current);
@@ -364,8 +377,8 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     const isCorrect = optionIndex === currentQuestion.correctAnswerIndex;
     const playerState = players.find(p => p.id === currentUser.id) || players[0];
 
-    // Visual feedback trigger
-    if (!isCorrect) setWasWrong(true);
+    // NOTE: Removed setWasWrong(true) here to delay red border until reveal
+    // NOTE: Removed AudioController.play(...) here to delay sound until reveal
 
     const now = Date.now();
     const elapsedSeconds = (now - questionStartTime.current) / 1000;
@@ -389,32 +402,18 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
 
     userPendingUpdate.current = { scoreToAdd, streak: newStreak, correct: isCorrect };
 
-    // Play sound immediately
-    AudioController.play(isCorrect ? 'correct' : 'wrong');
+    // Set Phase to ROUND_RESULT immediately (or after short delay if desired, but instant is better for responsiveness)
+    setPhase(GamePhase.ROUND_RESULT);
+    isProcessing.current = true;
+    
+    // Process Logic
+    processRoundResults();
 
-    if (isSurvival) {
-        setPhase(GamePhase.ROUND_RESULT);
-        isProcessing.current = true;
-        
-        processRoundResults();
-        
-        if (!isCorrect) {
-             // Reduced wait time for Game Over to keep it snappy
-             setTimeout(() => finishGame(), 1500);
-        } else {
-             proceedToNextQuestion();
-        }
-        return;
+    if (isSurvival && !isCorrect) {
+         setTimeout(() => finishGame(), 1500);
+    } else {
+         proceedToNextQuestion();
     }
-
-    if (isTimeAttack) {
-         setPhase(GamePhase.ROUND_RESULT);
-         isProcessing.current = true;
-         processRoundResults();
-         proceedToNextQuestion(); 
-    }
-
-    // Classic logic handled elsewhere (timer or manual wait if we add manual next)
 
   }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isTimeAttack, isSurvival, processRoundResults, proceedToNextQuestion, finishGame]);
 
@@ -430,13 +429,9 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
 
     setPhase(GamePhase.ROUND_RESULT);
     isProcessing.current = true;
-    setWasWrong(true); // Time up is wrong
-
-    if (userPendingUpdate.current) {
-        AudioController.play(userPendingUpdate.current.correct ? 'correct' : 'wrong');
-    } else {
-        AudioController.play('wrong'); 
-    }
+    
+    // NOTE: Removed setWasWrong(true) and AudioController calls here. 
+    // The Effect on [phase] will handle the wrong sound because userPendingUpdate.current is null/false.
 
     const survivalDeath = processRoundResults();
     
@@ -518,7 +513,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4" key={currentQuestion.id}>
             {currentQuestion.options.map((option, idx) => {
               const isSelected = selectedOption === idx;
               const isCorrect = idx === currentQuestion.correctAnswerIndex;
@@ -544,7 +539,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
               
               return (
                 <Button
-                  key={idx}
+                  key={`${currentQuestion.id}-${idx}`}
                   variant={btnVariant}
                   onClick={() => handleAnswer(idx)} 
                   disabled={selectedOption !== null || phase !== GamePhase.PLAYING}

@@ -1,19 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { GameConfig, Difficulty, GameMode } from '../types';
+import { GameConfig, Difficulty, GameMode, Player } from '../types';
 import { Button } from '../components/Button';
-import { Trophy, Users, Zap, Globe, Copy, Share2, Play, Timer, Skull, RefreshCw } from 'lucide-react';
+import { Trophy, Users, Zap, Globe, Copy, Share2, Play, Timer, Skull, RefreshCw, ArrowRight, LogIn } from 'lucide-react';
 import { getStats } from '../utils/storage';
 import { socket } from '../services/socket';
 
 interface LobbyProps {
   onStartGame: (config: GameConfig) => void;
   isLoading: boolean;
+  currentUser: Player;
 }
 
 type LobbyMode = 'setup' | 'waiting';
 type ConnectionMode = 'solo' | 'multiplayer';
 
-export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
+export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUser }) => {
   const [lobbyMode, setLobbyMode] = useState<LobbyMode>('setup');
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('solo');
   const [isConnected, setIsConnected] = useState(socket.connected);
@@ -22,6 +23,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
   const [difficulty, setDifficulty] = useState<Difficulty>(Difficulty.PRO);
   const [gameMode, setGameMode] = useState<GameMode>(GameMode.CLASSIC);
   const [roomCode, setRoomCode] = useState('');
+  const [joinCodeInput, setJoinCodeInput] = useState(''); // New input state
   const [playersInLobby, setPlayersInLobby] = useState<any[]>([]);
 
   // Performance Optimization: Lazy initialization for stats
@@ -29,10 +31,28 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
   
   const topics = ['Futebol', 'Basquete', 'Fórmula 1', 'Olimpíadas', 'Vôlei', 'MMA'];
 
+  // Check for Room Code in URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const roomFromUrl = params.get('room');
+    
+    if (roomFromUrl) {
+      setConnectionMode('multiplayer');
+      setJoinCodeInput(roomFromUrl);
+      if (!socket.connected) socket.connect();
+      
+      // Delay slightly to ensure socket connection or handle logic inside onConnect
+      setTimeout(() => {
+        handleJoinRoom(roomFromUrl);
+      }, 500);
+    }
+  }, []);
+
   // Socket Connection Management
   useEffect(() => {
     function onConnect() {
       setIsConnected(true);
+      // Retry join if we have a code pending? Logic could be enhanced here
     }
 
     function onDisconnect() {
@@ -45,21 +65,34 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
     }
 
     function onUpdatePlayers(players: any[]) {
+      console.log("Updated players:", players);
       setPlayersInLobby(players);
+      // If we are in the player list, ensure we are in waiting mode
+      const amIInList = players.some((p: any) => p.name === currentUser.name); // Using name or ideally ID match
+      if (amIInList && lobbyMode !== 'waiting') {
+        setLobbyMode('waiting');
+      }
+    }
+
+    function onError(message: string) {
+      alert(`Erro: ${message}`);
+      setLobbyMode('setup');
     }
 
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('room_created', onRoomCreated);
     socket.on('update_players', onUpdatePlayers);
+    socket.on('error', onError);
 
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('room_created', onRoomCreated);
       socket.off('update_players', onUpdatePlayers);
+      socket.off('error', onError);
     };
-  }, []);
+  }, [lobbyMode, currentUser.name]);
 
   const handleStart = () => {
     // Logic for round count based on mode
@@ -80,16 +113,37 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
 
   const createRoom = () => {
     if (!socket.connected) {
-      alert("Conectando ao servidor... Tente novamente em instantes.");
       socket.connect();
-      return;
+      // Wait a brief moment or trust socket buffer
     }
 
     // Emit create_room event to backend
-    // Assuming 'currentUser' info would be passed here ideally, but using generic for now
     socket.emit('create_room', { 
-      player: { name: 'Host' }, 
+      player: { 
+        name: currentUser.name, 
+        avatar: currentUser.avatar, 
+        id: currentUser.id 
+      }, 
       config: { topic, difficulty, mode: gameMode } 
+    });
+  };
+
+  const handleJoinRoom = (code: string) => {
+    const cleanCode = code.trim().toUpperCase();
+    if (!cleanCode) return;
+
+    if (!socket.connected) socket.connect();
+
+    setRoomCode(cleanCode); // Set local state so we know what room we are in
+    
+    // Emit join event
+    socket.emit('join_room', {
+      roomId: cleanCode,
+      player: { 
+        name: currentUser.name, 
+        avatar: currentUser.avatar, 
+        id: currentUser.id 
+      }
     });
   };
 
@@ -107,9 +161,6 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
     // Connect socket if Multiplayer selected
     if (mode === 'multiplayer') {
       if (!socket.connected) socket.connect();
-    } else {
-      // Disconnect if going back to Solo to save resources (optional)
-      // socket.disconnect(); 
     }
     
     // If switching to multiplayer and current mode is Survival, reset to Classic
@@ -169,6 +220,30 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
           {lobbyMode === 'setup' ? (
             <div className="animate-fade-in flex-1 flex flex-col">
               
+              {/* JOIN ROOM SECTION (Only in Multiplayer) */}
+              {connectionMode === 'multiplayer' && (
+                <div className="mb-6 p-4 bg-blue-900/20 border border-blue-500/20 rounded-xl">
+                  <h3 className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">ENTRAR EM SALA EXISTENTE</h3>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="Código da Sala" 
+                      value={joinCodeInput}
+                      onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+                      className="flex-1 bg-slate-900/50 border border-slate-700 rounded-lg p-3 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono tracking-widest uppercase"
+                      maxLength={8}
+                    />
+                    <Button 
+                      onClick={() => handleJoinRoom(joinCodeInput)} 
+                      disabled={!joinCodeInput || !isConnected}
+                      className="px-6"
+                    >
+                      <LogIn className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {/* Game Mode Selection */}
               <div className="mb-6">
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">MODO DE JOGO</label>
@@ -256,7 +331,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
                     </span>
                   ) : (
                     <span className="flex items-center gap-2">
-                      {connectionMode === 'solo' ? 'INICIAR PARTIDA' : (isConnected ? 'CRIAR SALA ONLINE' : 'CONECTANDO...')} 
+                      {connectionMode === 'solo' ? 'INICIAR PARTIDA' : (isConnected ? 'CRIAR NOVA SALA' : 'CONECTANDO...')} 
                       <Play className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                     </span>
                   )}
@@ -297,9 +372,12 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
                  <Button onClick={copyLink} variant="secondary" fullWidth>
                     <Copy className="w-4 h-4 mr-2" /> Copiar Link
                  </Button>
+                 
+                 {/* Only Host (index 0 usually) should see start button, but for simplicity showing to all but checking logic */}
                  <Button onClick={handleStart} fullWidth size="lg">
                     <Play className="w-5 h-5 mr-2" /> COMEÇAR
                  </Button>
+                 
                  <Button onClick={() => setLobbyMode('setup')} variant="ghost" className="text-xs">
                     Voltar
                  </Button>
@@ -347,7 +425,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading }) => {
                  </li>
                  <li className="flex gap-2">
                    <Users className="w-4 h-4 text-blue-500 flex-shrink-0" />
-                   <span>No modo online, você vê os acertos dos oponentes em tempo real.</span>
+                   <span>No modo online, use o código da sala para chamar amigos.</span>
                  </li>
                  <li className="flex gap-2">
                    <Skull className="w-4 h-4 text-red-500 flex-shrink-0" />
