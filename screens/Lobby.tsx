@@ -34,7 +34,11 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
   
   const topics = ['Futebol', 'Basquete', 'Fórmula 1', 'Olimpíadas', 'Vôlei', 'MMA'];
 
-  const isHost = connectionMode === 'solo' || (playersInLobby.length > 0 && playersInLobby[0].id === socket.id);
+  // Host Logic:
+  // 1. Solo mode is always host.
+  // 2. Multiplayer Setup (empty lobby) allows user to configure before creating.
+  // 3. Multiplayer Waiting (lobby has people) checks if user is index 0.
+  const isHost = connectionMode === 'solo' || playersInLobby.length === 0 || (playersInLobby.length > 0 && playersInLobby[0].id === socket.id);
 
   // ... (Socket effects and hooks remain unchanged, focusing update on UI)
   useEffect(() => {
@@ -52,6 +56,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
   }, []);
 
   useEffect(() => {
+    // Only Host emits config updates to the room
     if (connectionMode === 'multiplayer' && isHost && roomCode) {
         socket.emit('update_config', {
             roomId: roomCode,
@@ -73,11 +78,11 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
       if (amIInList && lobbyMode !== 'waiting') setLobbyMode('waiting');
     }
     function onRoomConfigUpdated(config: GameConfig) {
-        if (!isHost) {
-            setTopic(config.topic);
-            setDifficulty(config.difficulty);
-            setGameMode(config.mode);
-        }
+        // ALWAYS update local state from server truth when event is received.
+        // This ensures Joiners get the Host's config immediately.
+        setTopic(config.topic);
+        setDifficulty(config.difficulty);
+        setGameMode(config.mode);
     }
     function onGameStarted(data: any) {
         onStartGame({
@@ -109,7 +114,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
       socket.off('game_started', onGameStarted);
       socket.off('error', onError);
     };
-  }, [lobbyMode, currentUser.name, onStartGame, isHost]);
+  }, [lobbyMode, currentUser.name, onStartGame]);
 
   const handleStart = async () => {
     if (connectionMode === 'multiplayer') {
@@ -171,12 +176,21 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
   const switchConnectionMode = (mode: ConnectionMode) => {
     setConnectionMode(mode);
     setLobbyMode('setup');
+    setPlayersInLobby([]); // Clear players to reset Host state logic
+    setRoomCode('');
     if (mode === 'multiplayer') {
       if (!socket.connected) socket.connect();
     }
     if (mode === 'multiplayer' && gameMode === GameMode.SURVIVAL) {
       setGameMode(GameMode.CLASSIC);
     }
+  };
+
+  const handleBackToSetup = () => {
+    setLobbyMode('setup');
+    setPlayersInLobby([]); // Clear players
+    setRoomCode(''); // Clear room code
+    // Ideally emit 'leave_room' here if backend supports it
   };
 
   const availableModes = [
@@ -317,6 +331,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
                     <div><span className="text-slate-500 text-xs font-bold uppercase block">Tema</span><span className="text-white font-bold">{topic}</span></div>
                     <div><span className="text-slate-500 text-xs font-bold uppercase block">Dificuldade</span><span className="text-white font-bold">{difficulty}</span></div>
                  </div>
+                 {!isHost && <div className="text-center mt-3 text-xs text-blue-400 animate-pulse">Configurado pelo Host</div>}
               </div>
               <div className="mb-8">
                  <p className="text-slate-400 text-sm font-bold mb-3">LOBBY ({playersInLobby.length}/8)</p>
@@ -334,7 +349,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
               <div className="flex flex-col gap-3">
                  <Button onClick={copyLink} variant="secondary" fullWidth><Copy className="w-4 h-4 mr-2" /> Copiar Link</Button>
                  {isHost ? (<Button onClick={handleStart} fullWidth size="lg" disabled={isGeneratingOnline} className={isGeneratingOnline ? 'opacity-80' : ''}>{isGeneratingOnline ? 'Gerando...' : 'INICIAR JOGO'}</Button>) : (<div className="bg-slate-800 p-3 rounded-lg text-slate-400 text-sm animate-pulse">Aguardando o Host...</div>)}
-                 <Button onClick={() => setLobbyMode('setup')} variant="ghost" className="text-xs">Voltar</Button>
+                 <Button onClick={handleBackToSetup} variant="ghost" className="text-xs">Voltar</Button>
               </div>
             </div>
           )}
