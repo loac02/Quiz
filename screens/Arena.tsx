@@ -352,9 +352,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     // --- ONLINE SYNC LOGIC ---
     if (isOnline && socket.connected && roomId) {
          if (config.mode === GameMode.CLASSIC) {
-             // DELAYED EMIT STRATEGY:
-             // Instead of relying on handleTimeUp (which depends on Timer UI),
-             // we set a robust timeout here for the exact remaining time.
+             // DELAYED EMIT STRATEGY
              const remainingTimeMs = Math.max(0, (QUESTION_DURATION * 1000) - (now - questionStartTime.current));
              
              pendingOnlineEmitTimeout.current = setTimeout(() => {
@@ -447,7 +445,11 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
              <span>
                {(isSurvival || isTimeAttack) ? `PERGUNTA ${currentQuestionIndex + 1}` : `PERGUNTA ${currentQuestionIndex + 1} / ${questions.length}`}
              </span>
-             {isOnline && !socket.connected && <WifiOff className="w-4 h-4 text-red-500 animate-pulse" title="Desconectado" />}
+             {isOnline && !socket.connected && (
+               <div title="Desconectado">
+                 <WifiOff className="w-4 h-4 text-red-500 animate-pulse" />
+               </div>
+             )}
           </div>
           <div className="flex gap-2">
              <span className="bg-slate-800 px-3 py-1 rounded text-sm border border-slate-700">{config.mode}</span>
