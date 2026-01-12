@@ -18,9 +18,6 @@ const io = new Server(server, {
 // Game State Storage (In-memory for simplicity)
 const rooms = new Map();
 
-const QUESTION_DURATION = 15;
-const ROUND_RESULT_DURATION = 8;
-
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
@@ -39,7 +36,9 @@ io.on('connection', (socket) => {
 
     socket.join(roomId);
     socket.emit('room_created', { roomId });
+    // Emit initial players AND config
     io.to(roomId).emit('update_players', rooms.get(roomId).players);
+    io.to(roomId).emit('room_config_updated', config);
     console.log(`Room ${roomId} created by ${player.name}`);
   });
 
@@ -65,11 +64,7 @@ io.on('connection', (socket) => {
     // Prevent Duplicates
     const existingPlayerIndex = room.players.findIndex(p => p.id === socket.id || p.name === player.name);
     if (existingPlayerIndex !== -1) {
-      // If simply reconnecting with same socket ID, just update. 
-      // If different socket but same name, reject or overwrite.
-      // For simplicity, we assume same session re-join is okay, but strictly duplications are bad.
       if (room.players[existingPlayerIndex].id === socket.id) {
-         // Already in room, ignore
          return;
       }
       socket.emit('error', 'Você já está nesta sala ou o nome já está em uso.');
@@ -79,24 +74,45 @@ io.on('connection', (socket) => {
     room.players.push({ ...player, id: socket.id, score: 0, streak: 0 });
     socket.join(roomId);
     
+    // Broadcast players update
     io.to(roomId).emit('update_players', room.players);
+    
+    // Send current config to the new joiner so they are synced with Host
+    socket.emit('room_config_updated', room.config);
+    
     console.log(`${player.name} joined room ${roomId}`);
+  });
+
+  // Update Config (Host only ideally, but trusted client for now)
+  socket.on('update_config', ({ roomId, config }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      
+      // Update server state
+      room.config = config;
+      
+      // Broadcast to everyone else in room
+      socket.to(roomId).emit('room_config_updated', config);
   });
 
   // Start Game
   socket.on('start_game', async ({ roomId, questions }) => {
     const room = rooms.get(roomId);
-    if (!room || room.hostId !== socket.id) return;
+    if (!room) return;
+    
+    // Only Host can start (double check)
+    if (room.hostId !== socket.id) return;
 
     room.questions = questions; 
     room.currentQuestionIndex = 0;
     room.phase = 'PLAYING';
 
-    io.to(roomId).emit('game_started', { questions: room.questions, players: room.players });
-    
-    // Server-side timer orchestration could happen here, 
-    // but for this version we let clients handle their sync via startRound
-    // startRound(roomId); 
+    // Broadcast both the Questions AND the Final Config to ensure everyone plays the same game
+    io.to(roomId).emit('game_started', { 
+        questions: room.questions, 
+        players: room.players,
+        config: room.config 
+    });
   });
 
   // Handle Answer
@@ -107,8 +123,6 @@ io.on('connection', (socket) => {
     const player = room.players.find(p => p.id === socket.id);
     if (!player) return;
 
-    // Use score calculated by client (trusted client for this demo) or calculate server side
-    // Updating score
     player.score += scoreToAdd;
     if (scoreToAdd > 0) {
         player.streak += 1;
@@ -117,7 +131,6 @@ io.on('connection', (socket) => {
         player.streak = 0;
     }
     
-    // Broadcast updated scores immediately so everyone sees the live leaderboard
     io.to(roomId).emit('update_players', room.players); 
   });
 
@@ -129,8 +142,13 @@ io.on('connection', (socket) => {
         room.players.splice(index, 1);
         io.to(roomId).emit('update_players', room.players);
         
+        // If Host leaves, maybe assign new host? For now, if empty delete.
         if (room.players.length === 0) {
           rooms.delete(roomId);
+        } else if (socket.id === room.hostId) {
+            // Assign new host to next player
+            room.hostId = room.players[0].id;
+            // Optionally notify clients of new host, but currently UI infers host from list index 0
         }
       }
     });

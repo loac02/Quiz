@@ -20,6 +20,7 @@ const BASE_POINTS = 100;
 const TIME_ATTACK_DURATION = 30;
 const QUESTION_DURATION = 10;
 const RESULT_DURATION_MS = 6000;
+const TIME_ATTACK_TRANSITION_MS = 1000; // 1 second transition for Time Attack
 
 // Bot Personality Definition (Same as before)
 interface BotPersonality {
@@ -166,7 +167,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
       
       return [...prev, ...bots];
     });
-  }, [config.mode]); // Removed 'players.length' dependency to avoid infinite loop or weird re-adds
+  }, [config.mode]);
 
   useEffect(() => {
     questionStartTime.current = Date.now();
@@ -195,8 +196,6 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
   useEffect(() => {
     if (phase === GamePhase.ROUND_RESULT) {
       const isCorrect = pendingAnswerUpdate.current?.correct ?? false;
-      
-      // If no answer was given (timeout), it counts as wrong
       const actuallyWrong = !isCorrect; 
       
       if (actuallyWrong) setWasWrong(true);
@@ -229,7 +228,6 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
 
     // Survival Check
     if (isSurvival) {
-       // Check pending update (human)
        if (!pendingAnswerUpdate.current || !pendingAnswerUpdate.current.correct) {
            isGameOver = true;
        }
@@ -241,14 +239,6 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
         if (!p.isBot) {
           const update = pendingAnswerUpdate.current;
           
-          // Sync with Server if Online
-          if (isOnline && socket.connected && update) {
-              // We only emit ONCE per round when processing results
-              // Ideally this happens on handleAnswer, but we are delaying result processing.
-              // To prevent cheating, we should emit answer time/index earlier, but for this "reveal at end" request:
-              // We emit the score NOW.
-          }
-
           if (update) {
             if (update.correct) sessionStats.current.correctCount++;
             return {
@@ -264,15 +254,13 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
         }
 
         // --- BOT LOGIC (Only if not online) ---
-        if (isOnline) return p; // Should not happen given init logic, but safe guard
+        if (isOnline) return p; 
         
-        // ... (Bot logic same as before, condensed for brevity) ...
         const personality = BOT_PERSONALITIES[p.id] || BOT_PERSONALITIES['bot-3'];
         let chance = personality.baseAccuracy + ((Math.random() * 0.10) - 0.05);
         const isSpecialty = personality.specialties.some(s => category.toLowerCase().includes(s.toLowerCase()));
         if (isSpecialty) chance += 0.25;
         
-        // Rubber banding
         const scoreDiff = humanScore - p.score;
         if (scoreDiff > 300) chance += 0.15;
         if (scoreDiff < -400) chance -= 0.10;
@@ -282,29 +270,50 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
 
         if (isCorrect) {
           const diffMult = getDifficultyMultiplier(p.streak, currentDifficulty);
-          let timeBonus = 10; // Averaged for simplicity in this refactor
-          const points = Math.floor((BASE_POINTS + timeBonus) * diffMult); 
+          let points = 0;
+          
+          // Bot logic for Time Attack: Simple +1
+          if (isTimeAttack) {
+             points = 1;
+          } else {
+             let timeBonus = 10;
+             points = Math.floor((BASE_POINTS + timeBonus) * diffMult); 
+          }
+          
           return { 
              ...p, score: p.score + points, streak: p.streak + 1, 
              correctAnswersCount: (p.correctAnswersCount || 0) + 1, lastAnswerCorrect: true 
           };
         } else {
-          return { ...p, streak: 0, lastAnswerCorrect: false };
+          // Bot logic for Time Attack: -1 penalty ONLY if score > 0
+          let points = 0;
+          if (isTimeAttack) {
+             points = p.score > 0 ? -1 : 0;
+          }
+
+          return { ...p, score: p.score + points, streak: 0, lastAnswerCorrect: false };
         }
       });
     });
 
     return isGameOver;
-  }, [isSurvival, currentDifficulty, questions, currentQuestionIndex, players, isOnline]);
+  }, [isSurvival, isTimeAttack, currentDifficulty, questions, currentQuestionIndex, players, isOnline]);
 
   const finishGame = useCallback(() => {
     const player = players.find(p => p.id === currentUser.id) || players[0];
-    updateDetailedStats(player.score, sessionStats.current.correctCount, currentQuestionIndex + 1, sessionStats.current.bestTime, config.topic);
+    updateDetailedStats(
+        player.score, 
+        sessionStats.current.correctCount, 
+        currentQuestionIndex + 1, 
+        sessionStats.current.bestTime, 
+        config.topic,
+        config.mode // Pass the mode for breakdown
+    );
     onGameEnd(players);
-  }, [players, currentUser.id, onGameEnd, currentQuestionIndex, config.topic]);
+  }, [players, currentUser.id, onGameEnd, currentQuestionIndex, config.topic, config.mode]);
 
   const proceedToNextQuestion = useCallback((forceGameOver = false) => {
-    const delay = (isTimeAttack || isSurvival) ? 1500 : RESULT_DURATION_MS; // Increased delay for survival/time attack to see result
+    const delay = isTimeAttack ? TIME_ATTACK_TRANSITION_MS : ((isSurvival) ? 1500 : RESULT_DURATION_MS);
     
     nextQuestionTimeout.current = setTimeout(() => {
       if (forceGameOver) {
@@ -326,7 +335,6 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     }, delay); 
   }, [currentQuestionIndex, questions.length, finishGame, isTimeAttack, isSurvival]);
 
-  // Modified: Only records the choice. Does NOT reveal result.
   const handleAnswer = useCallback((optionIndex: number) => {
     if (phase !== GamePhase.PLAYING || selectedOption !== null) return;
     
@@ -346,53 +354,61 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     let scoreToAdd = 0;
     let newStreak = 0;
 
-    if (isCorrect) {
-      const difficultyMult = getDifficultyMultiplier(playerState.streak, currentDifficulty);
-      const speedFactor = Math.max(0, 1 - (elapsedSeconds / 10)); 
-      const timeBonus = Math.floor(50 * speedFactor); 
+    if (isTimeAttack) {
+        // TIME ATTACK RULES: +1 for correct, -1 for wrong (only if score > 0)
+        if (isCorrect) {
+            scoreToAdd = 1;
+            newStreak = playerState.streak + 1;
+        } else {
+            scoreToAdd = playerState.score > 0 ? -1 : 0;
+            newStreak = 0;
+        }
+    } else {
+        // STANDARD RULES
+        if (isCorrect) {
+          const difficultyMult = getDifficultyMultiplier(playerState.streak, currentDifficulty);
+          const speedFactor = Math.max(0, 1 - (elapsedSeconds / 10)); 
+          const timeBonus = Math.floor(50 * speedFactor); 
 
-      scoreToAdd = Math.floor((BASE_POINTS + timeBonus) * difficultyMult);
-      newStreak = playerState.streak + 1;
+          scoreToAdd = Math.floor((BASE_POINTS + timeBonus) * difficultyMult);
+          newStreak = playerState.streak + 1;
+        }
     }
 
     // Staging the result
     pendingAnswerUpdate.current = { scoreToAdd, streak: newStreak, correct: isCorrect };
     
-    // If Online, emit immediately to server so it knows we answered (prevent cheating via delay)
-    // Server logic will broadcast update_players
+    // Online Sync
     if (isOnline && socket.connected) {
-         // Get room ID from somewhere? We don't have it in props directly usually, 
-         // but we can assume user knows their room or just emit global answer? 
-         // Better: App should pass roomId or we infer it. 
-         // For now, relying on socket finding the player's room via socket.id on server.
-         // Wait, server/index.js `submit_answer` takes roomId. 
-         // We need roomId here. 
-         // PATCH: The Lobby sets roomCode. App doesn't store it explicitly in a prop passed to Arena.
-         // Ideally, pass roomId to Arena.
-         // WORKAROUND: Client emits, server finds room by socket.id (server supports this? No, server expects roomId).
-         
-         // Fix: We must pass roomId to Arena or store it in a context.
-         // Since I can't easily change App props drastically without breaking flow, 
-         // let's grab it from URL params if in multiplayer mode, as Lobby sets URL.
          const params = new URLSearchParams(window.location.search);
          const roomFromUrl = params.get('room');
          if (roomFromUrl) {
              socket.emit('submit_answer', { 
                  roomId: roomFromUrl, 
                  answerIndex: optionIndex,
-                 scoreToAdd: scoreToAdd // Client authoritative for this demo
+                 scoreToAdd: scoreToAdd 
              });
          }
     }
 
-    // DO NOT setPhase(ROUND_RESULT) here. Wait for Timer.
+    if (isTimeAttack) {
+        // For Time Attack, we reveal immediately and move on quickly
+        // We DO NOT wait for the question timer, but the Global Timer keeps running.
+        setPhase(GamePhase.ROUND_RESULT);
+        processRoundResults();
+        proceedToNextQuestion();
+    } else {
+        // For Classic/Survival, we wait for the question timer to end (handled by handleTimeUp)
+        // or we could show a waiting state. Current request says: "wait for timer".
+        // The Timer component continues running and will trigger handleTimeUp when done.
+    }
     
-  }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isOnline]);
+  }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isOnline, isTimeAttack, processRoundResults, proceedToNextQuestion]);
 
-  // Modified: Handles the transition to reveal phase
   const handleTimeUp = useCallback(() => {
     if (phase !== GamePhase.PLAYING) return;
 
+    // GLOBAL TIMER END (For Time Attack)
     if (isTimeAttack) {
       AudioController.play('timeup');
       setPhase(GamePhase.GAME_OVER);
@@ -400,7 +416,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
       return;
     }
 
-    // Reveal Phase
+    // Reveal Phase (Classic / Survival)
     setPhase(GamePhase.ROUND_RESULT);
     
     const survivalDeath = processRoundResults();
@@ -438,6 +454,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm rounded-xl">
             <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
             <h2 className="text-xl font-display font-bold text-white">Carregando próxima rodada...</h2>
+            {isTimeAttack && <p className="text-blue-300">Corra! O tempo não para!</p>}
         </div>
       )}
 
@@ -487,7 +504,6 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
               } else {
                 // Playing Phase Logic
                 if (isSelected) {
-                    // Show "Selected" state (e.g. Blue or Grey, not Green yet)
                     btnVariant = 'primary';
                     customClass = '!bg-blue-600 !border-blue-500'; 
                 }
@@ -513,11 +529,12 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
             })}
           </div>
 
+           {/* Loading bar for next question (Faster for Time Attack) */}
            {(phase === GamePhase.ROUND_RESULT) && (
              <div 
                 className="absolute bottom-0 left-0 h-1 bg-blue-500 w-full origin-left will-change-transform" 
                 style={{
-                  animation: `scaleX ${(isTimeAttack || isSurvival) ? 0.8 : RESULT_DURATION_MS/1000}s linear forwards`
+                  animation: `scaleX ${isTimeAttack ? TIME_ATTACK_TRANSITION_MS/1000 : ((isSurvival ? 0.8 : RESULT_DURATION_MS/1000))}s linear forwards`
                 }}
              />
           )}
@@ -529,9 +546,12 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
               key={isTimeAttack ? 'global-timer' : currentQuestionIndex}
               duration={isTimeAttack ? TIME_ATTACK_DURATION : QUESTION_DURATION} 
               onTimeUp={handleTimeUp} 
-              isRunning={phase === GamePhase.PLAYING && !isWaitingForMore}
+              // In Time Attack, the timer ONLY stops if waiting for more questions (Loading)
+              // In Classic, it pauses during Result phase
+              isRunning={isTimeAttack ? !isWaitingForMore : (phase === GamePhase.PLAYING && !isWaitingForMore)}
               isGlobal={isTimeAttack}
           />
+          {isTimeAttack && <p className="text-center text-xs text-slate-500 mt-2">TEMPO GLOBAL</p>}
         </div>
 
       </div>
@@ -541,8 +561,15 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
         <div className="mt-4 p-4 glass-panel rounded-xl text-center">
              <div className="text-blue-400 font-display font-bold text-lg flex items-center justify-center gap-2">
                 {isSurvival && <Skull className="w-4 h-4" />}
+                {isTimeAttack && <Clock className="w-4 h-4" />}
                 {isOnline && <div className="text-xs text-green-400 bg-green-900/30 px-2 py-1 rounded">ONLINE</div>}
+                <span>{config.mode}</span>
             </div>
+            {isTimeAttack && (
+                <div className="text-xs text-slate-400 mt-2">
+                    Acerto: +1 | Erro: -1
+                </div>
+            )}
         </div>
       </div>
       </>

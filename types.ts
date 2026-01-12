@@ -50,6 +50,12 @@ export interface GameConfig {
   mode: GameMode;
 }
 
+export interface ModeStats {
+  gamesPlayed: number;
+  highScore: number;
+  totalCorrect: number;
+}
+
 export interface UserStats {
   gamesPlayed: number;
   totalScore: number;
@@ -58,4 +64,5 @@ export interface UserStats {
   totalQuestions: number;
   fastestAnswer: number;
   favoriteCategory: string;
+  modes: Record<GameMode, ModeStats>; // Estatísticas por modo
 }

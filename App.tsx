@@ -39,15 +39,13 @@ const App: React.FC = () => {
     setPhase(GamePhase.LOBBY);
   }, []);
 
-  const handleStartGame = useCallback(async (config: GameConfig, initialPlayers?: Player[]) => {
-    // Instead of just setting loading state, we switch to LOADING phase
-    // This allows us to render the full Loading Screen
+  // Updated Signature: accept preGeneratedQuestions
+  const handleStartGame = useCallback(async (config: GameConfig, initialPlayers?: Player[], preGeneratedQuestions?: Question[]) => {
     setPhase(GamePhase.LOADING);
     setLoading(true); 
     setGameConfig(config);
     
-    // Set initial players (important for Online mode)
-    // If provided, use them. Otherwise, wait for Arena to init solo/bots.
+    // Set initial players
     if (initialPlayers && initialPlayers.length > 0) {
         setPlayers(initialPlayers);
     } else {
@@ -55,15 +53,23 @@ const App: React.FC = () => {
     }
     
     try {
-      // Pass empty history for new game
-      const generatedQuestions = await generateQuestions(
-        config.topic, 
-        config.difficulty, 
-        config.roundCount,
-        config.mode,
-        [] 
-      );
-      setQuestions(generatedQuestions);
+      let finalQuestions: Question[] = [];
+
+      // If online mode provided questions, use them directly (Sync Source of Truth)
+      if (preGeneratedQuestions && preGeneratedQuestions.length > 0) {
+          finalQuestions = preGeneratedQuestions;
+      } else {
+          // Otherwise, generate locally (Solo Mode)
+          finalQuestions = await generateQuestions(
+            config.topic, 
+            config.difficulty, 
+            config.roundCount,
+            config.mode,
+            [] 
+          );
+      }
+      
+      setQuestions(finalQuestions);
       setPhase(GamePhase.PLAYING);
       
       // Reset user score for new game BUT keep the ID and Name
@@ -71,7 +77,7 @@ const App: React.FC = () => {
     } catch (err) {
       console.error(err);
       alert("Falha ao gerar a arena. Por favor, tente novamente.");
-      setPhase(GamePhase.LOBBY); // Go back to Lobby on error
+      setPhase(GamePhase.LOBBY); 
     } finally {
       setLoading(false);
     }
