@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { GameConfig, Difficulty, GameMode, Player, Question, ModeStats } from '../types';
 import { Button } from '../components/Button';
-import { Trophy, Users, Zap, Globe, Copy, Share2, Play, Timer, Skull, RefreshCw, ArrowRight, LogIn, Lock, BarChart2 } from 'lucide-react';
+import { Trophy, Users, Zap, Globe, Copy, Share2, Play, Timer, Skull, RefreshCw, ArrowRight, LogIn, Lock, BarChart2, Settings } from 'lucide-react';
 import { getStats } from '../utils/storage';
 import { socket } from '../services/socket';
 import { generateQuestions } from '../services/ai';
@@ -35,12 +35,9 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
   const topics = ['Futebol', 'Basquete', 'Fórmula 1', 'Olimpíadas', 'Vôlei', 'MMA'];
 
   // Host Logic:
-  // 1. Solo mode is always host.
-  // 2. Multiplayer Setup (empty lobby) allows user to configure before creating.
-  // 3. Multiplayer Waiting (lobby has people) checks if user is index 0.
-  const isHost = connectionMode === 'solo' || playersInLobby.length === 0 || (playersInLobby.length > 0 && playersInLobby[0].id === socket.id);
+  // Is Host if Solo OR if Multiplayer and I am the first in the list.
+  const isHost = connectionMode === 'solo' || (playersInLobby.length > 0 && playersInLobby[0].id === socket.id);
 
-  // ... (Socket effects and hooks remain unchanged, focusing update on UI)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roomFromUrl = params.get('room');
@@ -56,14 +53,16 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
   }, []);
 
   useEffect(() => {
-    // Only Host emits config updates to the room
-    if (connectionMode === 'multiplayer' && isHost && roomCode) {
-        socket.emit('update_config', {
-            roomId: roomCode,
-            config: { topic, difficulty, mode: gameMode }
-        });
+    // Only Host emits config updates to the room.
+    if (connectionMode === 'multiplayer' && roomCode && playersInLobby.length > 0) {
+        if (playersInLobby[0].id === socket.id) {
+            socket.emit('update_config', {
+                roomId: roomCode,
+                config: { topic, difficulty, mode: gameMode }
+            });
+        }
     }
-  }, [topic, difficulty, gameMode, isHost, connectionMode, roomCode]);
+  }, [topic, difficulty, gameMode, connectionMode, roomCode, playersInLobby]);
 
   useEffect(() => {
     function onConnect() { setIsConnected(true); }
@@ -78,8 +77,6 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
       if (amIInList && lobbyMode !== 'waiting') setLobbyMode('waiting');
     }
     function onRoomConfigUpdated(config: GameConfig) {
-        // ALWAYS update local state from server truth when event is received.
-        // This ensures Joiners get the Host's config immediately.
         setTopic(config.topic);
         setDifficulty(config.difficulty);
         setGameMode(config.mode);
@@ -121,7 +118,6 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
         if (!isHost) return; 
         setIsGeneratingOnline(true);
         try {
-            // Determine question count for online
             let questionCount = 5;
             if (gameMode === GameMode.TIME_ATTACK) questionCount = 25;
 
@@ -141,7 +137,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
     } else {
         let rounds = 5;
         if (gameMode === GameMode.SURVIVAL) rounds = 10;
-        if (gameMode === GameMode.TIME_ATTACK) rounds = 25; // Request 25 for Time Attack Solo
+        if (gameMode === GameMode.TIME_ATTACK) rounds = 25; 
         
         onStartGame({ topic, difficulty, roundCount: rounds, mode: gameMode });
     }
@@ -149,6 +145,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
 
   const createRoom = () => {
     if (!socket.connected) socket.connect();
+    // Use current defaults (which user can change INSIDE the lobby later)
     socket.emit('create_room', { 
       player: { name: currentUser.name, avatar: currentUser.avatar, id: currentUser.id }, 
       config: { topic, difficulty, mode: gameMode } 
@@ -176,7 +173,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
   const switchConnectionMode = (mode: ConnectionMode) => {
     setConnectionMode(mode);
     setLobbyMode('setup');
-    setPlayersInLobby([]); // Clear players to reset Host state logic
+    setPlayersInLobby([]); 
     setRoomCode('');
     if (mode === 'multiplayer') {
       if (!socket.connected) socket.connect();
@@ -188,9 +185,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
 
   const handleBackToSetup = () => {
     setLobbyMode('setup');
-    setPlayersInLobby([]); // Clear players
-    setRoomCode(''); // Clear room code
-    // Ideally emit 'leave_room' here if backend supports it
+    setPlayersInLobby([]); 
+    setRoomCode(''); 
   };
 
   const availableModes = [
@@ -201,6 +197,49 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
     if (connectionMode === 'multiplayer' && m.mode === GameMode.SURVIVAL) return false;
     return true;
   });
+
+  // Reusable Controls Component
+  const ConfigControls = ({ disabled }: { disabled: boolean }) => (
+    <>
+        {/* Game Mode Selection */}
+        <div className="mb-6">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">MODO DE JOGO</label>
+            <div className="grid grid-cols-2 gap-3">
+            {availableModes.map((m) => (
+                <button key={m.label} onClick={() => setGameMode(m.mode)} disabled={disabled} className={`p-3 rounded-xl border text-left transition-all relative overflow-hidden group ${gameMode === m.mode ? 'bg-slate-800 border-blue-500 ring-1 ring-blue-500' : 'bg-slate-800/40 border-slate-700 hover:bg-slate-800'}`}>
+                <div className="flex items-center gap-3 mb-1 relative z-10">
+                    <m.icon className={`w-5 h-5 ${gameMode === m.mode ? 'text-blue-400' : 'text-slate-500'}`} />
+                    <span className={`font-bold text-sm ${gameMode === m.mode ? 'text-white' : 'text-slate-300'}`}>{m.label}</span>
+                </div>
+                <p className="text-[10px] text-slate-500 pl-8 relative z-10">{m.desc}</p>
+                {gameMode === m.mode && <div className="absolute inset-0 bg-blue-500/5 z-0" />}
+                </button>
+            ))}
+            </div>
+        </div>
+
+        {/* Topic Selection */}
+        <div className="mb-6">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">TEMA</label>
+            <div className="grid grid-cols-3 gap-2">
+            {topics.map((t) => (
+                <button key={t} onClick={() => setTopic(t)} disabled={disabled} className={`py-2 px-1 rounded-lg border text-xs font-semibold transition-all truncate ${topic === t ? 'bg-blue-600 border-blue-400 text-white shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}>{t}</button>
+            ))}
+            </div>
+            <input type="text" placeholder="Outro tema..." className="mt-2 w-full bg-slate-900/50 border border-slate-700 rounded-lg p-2 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50" value={topic} onChange={(e) => setTopic(e.target.value)} disabled={disabled} />
+        </div>
+
+        {/* Difficulty */}
+        <div className="mb-8">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">DIFICULDADE INICIAL</label>
+            <div className="flex gap-2 bg-slate-900/50 p-1 rounded-xl border border-slate-700">
+            {Object.values(Difficulty).map((d) => (
+                <button key={d} onClick={() => setDifficulty(d)} disabled={disabled} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${difficulty === d ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}>{d}</button>
+            ))}
+            </div>
+        </div>
+    </>
+  );
 
   // Determine which stats to show based on statsView selector
   const currentStatsDisplay = (() => {
@@ -240,7 +279,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
         
         {/* Main Settings Panel */}
         <div className="md:col-span-8 glass-panel p-6 rounded-2xl relative overflow-hidden flex flex-col">
-          {/* ... (Connection Mode Tabs - Same as before) */}
+          {/* Connection Mode Tabs */}
           <div className="flex p-1 bg-slate-900/60 rounded-lg mb-6 relative z-10">
             <button onClick={() => switchConnectionMode('solo')} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all flex items-center justify-center gap-2 ${connectionMode === 'solo' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
               <Zap className="w-4 h-4" /> SOLO
@@ -255,7 +294,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
             <div className="animate-fade-in flex-1 flex flex-col">
               
               {connectionMode === 'multiplayer' && (
-                <div className="mb-6 p-4 bg-blue-900/20 border border-blue-500/20 rounded-xl">
+                <div className="mb-4 p-4 bg-blue-900/20 border border-blue-500/20 rounded-xl">
                   <h3 className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">ENTRAR EM SALA EXISTENTE</h3>
                   <div className="flex gap-2">
                     <input type="text" placeholder="Código da Sala" value={joinCodeInput} onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())} className="flex-1 bg-slate-900/50 border border-slate-700 rounded-lg p-3 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono tracking-widest uppercase" maxLength={8} />
@@ -264,55 +303,14 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
                 </div>
               )}
 
-              {/* LOCK OVERLAY */}
-              <div className="relative">
-                {connectionMode === 'multiplayer' && !isHost && (
-                    <div className="absolute inset-0 z-20 bg-slate-900/60 backdrop-blur-[1px] flex flex-col items-center justify-center rounded-xl border border-white/10">
-                        <Lock className="w-8 h-8 text-slate-400 mb-2" />
-                        <p className="text-white font-bold">Aguardando o Host configurar...</p>
-                    </div>
-                )}
-
-                {/* Game Mode Selection */}
-                <div className="mb-6">
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">MODO DE JOGO</label>
-                    <div className="grid grid-cols-2 gap-3">
-                    {availableModes.map((m) => (
-                        <button key={m.label} onClick={() => setGameMode(m.mode)} disabled={connectionMode === 'multiplayer' && !isHost} className={`p-3 rounded-xl border text-left transition-all relative overflow-hidden group ${gameMode === m.mode ? 'bg-slate-800 border-blue-500 ring-1 ring-blue-500' : 'bg-slate-800/40 border-slate-700 hover:bg-slate-800'}`}>
-                        <div className="flex items-center gap-3 mb-1 relative z-10">
-                            <m.icon className={`w-5 h-5 ${gameMode === m.mode ? 'text-blue-400' : 'text-slate-500'}`} />
-                            <span className={`font-bold text-sm ${gameMode === m.mode ? 'text-white' : 'text-slate-300'}`}>{m.label}</span>
-                        </div>
-                        <p className="text-[10px] text-slate-500 pl-8 relative z-10">{m.desc}</p>
-                        {gameMode === m.mode && <div className="absolute inset-0 bg-blue-500/5 z-0" />}
-                        </button>
-                    ))}
-                    </div>
+              {/* Show controls ONLY if Solo. In Multiplayer, controls are inside Waiting Room for Host only. */}
+              {connectionMode === 'solo' && (
+                <div className="relative animate-fade-in">
+                  <ConfigControls disabled={false} />
                 </div>
+              )}
 
-                {/* Topic Selection */}
-                <div className="mb-6">
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">TEMA</label>
-                    <div className="grid grid-cols-3 gap-2">
-                    {topics.map((t) => (
-                        <button key={t} onClick={() => setTopic(t)} disabled={connectionMode === 'multiplayer' && !isHost} className={`py-2 px-1 rounded-lg border text-xs font-semibold transition-all truncate ${topic === t ? 'bg-blue-600 border-blue-400 text-white shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}>{t}</button>
-                    ))}
-                    </div>
-                    <input type="text" placeholder="Outro tema..." className="mt-2 w-full bg-slate-900/50 border border-slate-700 rounded-lg p-2 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50" value={topic} onChange={(e) => setTopic(e.target.value)} disabled={connectionMode === 'multiplayer' && !isHost} />
-                </div>
-
-                {/* Difficulty */}
-                <div className="mb-8">
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">DIFICULDADE INICIAL</label>
-                    <div className="flex gap-2 bg-slate-900/50 p-1 rounded-xl border border-slate-700">
-                    {Object.values(Difficulty).map((d) => (
-                        <button key={d} onClick={() => setDifficulty(d)} disabled={connectionMode === 'multiplayer' && !isHost} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${difficulty === d ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}>{d}</button>
-                    ))}
-                    </div>
-                </div>
-              </div>
-
-              <div className="mt-auto">
+              <div className="mt-2">
                 <Button fullWidth size="lg" onClick={connectionMode === 'solo' ? handleStart : createRoom} disabled={isLoading || (connectionMode === 'multiplayer' && !isConnected)} className="group relative overflow-hidden">
                   {isLoading ? (<span className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"/> Preparando Arena...</span>) : (<span className="flex items-center gap-2">{connectionMode === 'solo' ? 'INICIAR PARTIDA' : (isConnected ? 'CRIAR NOVA SALA' : 'CONECTANDO...')} <Play className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></span>)}
                 </Button>
@@ -326,13 +324,28 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
                  <p className="text-slate-400 text-sm font-bold mb-2">CÓDIGO DA SALA</p>
                  <div className="text-4xl font-display font-bold text-blue-400 tracking-widest bg-slate-900/50 p-4 rounded-xl border border-blue-500/30 select-all">{roomCode || "..."}</div>
               </div>
-              <div className="mb-6 p-4 bg-slate-800/40 rounded-xl border border-slate-700 text-sm">
-                 <div className="grid grid-cols-2 gap-4 text-left">
-                    <div><span className="text-slate-500 text-xs font-bold uppercase block">Tema</span><span className="text-white font-bold">{topic}</span></div>
-                    <div><span className="text-slate-500 text-xs font-bold uppercase block">Dificuldade</span><span className="text-white font-bold">{difficulty}</span></div>
-                 </div>
-                 {!isHost && <div className="text-center mt-3 text-xs text-blue-400 animate-pulse">Configurado pelo Host</div>}
-              </div>
+              
+              {/* Host can edit, Joiner sees static */}
+              {isHost ? (
+                <div className="mb-6 p-4 bg-slate-800/40 rounded-xl border border-slate-700 text-left">
+                     <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                             <Settings className="w-4 h-4" /> CONFIGURAÇÃO DA SALA
+                        </h3>
+                     </div>
+                     <ConfigControls disabled={false} />
+                </div>
+              ) : (
+                <div className="mb-6 p-4 bg-slate-800/40 rounded-xl border border-slate-700 text-sm">
+                    <div className="grid grid-cols-2 gap-4 text-left">
+                        <div><span className="text-slate-500 text-xs font-bold uppercase block">Tema</span><span className="text-white font-bold">{topic}</span></div>
+                        <div><span className="text-slate-500 text-xs font-bold uppercase block">Dificuldade</span><span className="text-white font-bold">{difficulty}</span></div>
+                        <div><span className="text-slate-500 text-xs font-bold uppercase block">Modo</span><span className="text-white font-bold">{gameMode}</span></div>
+                    </div>
+                    <div className="text-center mt-3 text-xs text-blue-400 animate-pulse">Aguardando o Host iniciar...</div>
+                </div>
+              )}
+
               <div className="mb-8">
                  <p className="text-slate-400 text-sm font-bold mb-3">LOBBY ({playersInLobby.length}/8)</p>
                  <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
@@ -348,7 +361,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
               </div>
               <div className="flex flex-col gap-3">
                  <Button onClick={copyLink} variant="secondary" fullWidth><Copy className="w-4 h-4 mr-2" /> Copiar Link</Button>
-                 {isHost ? (<Button onClick={handleStart} fullWidth size="lg" disabled={isGeneratingOnline} className={isGeneratingOnline ? 'opacity-80' : ''}>{isGeneratingOnline ? 'Gerando...' : 'INICIAR JOGO'}</Button>) : (<div className="bg-slate-800 p-3 rounded-lg text-slate-400 text-sm animate-pulse">Aguardando o Host...</div>)}
+                 {isHost ? (<Button onClick={handleStart} fullWidth size="lg" disabled={isGeneratingOnline} className={isGeneratingOnline ? 'opacity-80' : ''}>{isGeneratingOnline ? 'Gerando...' : 'INICIAR JOGO'}</Button>) : (<div className="bg-slate-800 p-3 rounded-lg text-slate-400 text-sm animate-pulse">O Host está configurando a partida...</div>)}
                  <Button onClick={handleBackToSetup} variant="ghost" className="text-xs">Voltar</Button>
               </div>
             </div>

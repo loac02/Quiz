@@ -83,10 +83,16 @@ io.on('connection', (socket) => {
     console.log(`${player.name} joined room ${roomId}`);
   });
 
-  // Update Config (Host only ideally, but trusted client for now)
+  // Update Config (Host only)
   socket.on('update_config', ({ roomId, config }) => {
       const room = rooms.get(roomId);
       if (!room) return;
+      
+      // SECURITY CHECK: Only the first player (Host) can update config
+      // This prevents joiners from accidentally overwriting the host's settings
+      if (room.players.length > 0 && room.players[0].id !== socket.id) {
+         return; 
+      }
       
       // Update server state
       room.config = config;
@@ -101,7 +107,8 @@ io.on('connection', (socket) => {
     if (!room) return;
     
     // Only Host can start (double check)
-    if (room.hostId !== socket.id) return;
+    // Using hostId or index 0
+    if (room.players.length > 0 && room.players[0].id !== socket.id) return;
 
     room.questions = questions; 
     room.currentQuestionIndex = 0;
