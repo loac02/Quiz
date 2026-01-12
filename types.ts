@@ -57,6 +57,7 @@ export interface ModeStats {
 }
 
 export interface UserStats {
+  // Solo Stats (Default/Root for backward compatibility)
   gamesPlayed: number;
   totalScore: number;
   highScore: number;
@@ -64,5 +65,14 @@ export interface UserStats {
   totalQuestions: number;
   fastestAnswer: number;
   favoriteCategory: string;
-  modes: Record<GameMode, ModeStats>; // Estatísticas por modo
+  modes: Record<GameMode, ModeStats>; 
+  
+  // Separate Online Stats
+  online: {
+      gamesPlayed: number;
+      totalScore: number;
+      highScore: number;
+      totalCorrect: number;
+      modes: Record<GameMode, ModeStats>;
+  }
 }

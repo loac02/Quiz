@@ -14,6 +14,7 @@ interface ArenaProps {
   config: GameConfig;
   initialPlayers?: Player[]; // Players from lobby (online)
   onLoadMore?: () => void;
+  roomId?: string; // Explicit Room ID for Online functionality
 }
 
 const BASE_POINTS = 100;
@@ -89,7 +90,7 @@ class AudioController {
   }
 }
 
-export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser, config, onLoadMore, initialPlayers }) => {
+export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser, config, onLoadMore, initialPlayers, roomId }) => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [phase, setPhase] = useState<GamePhase>(GamePhase.PLAYING);
   
@@ -328,13 +329,16 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
         currentQuestionIndex + 1, 
         sessionStats.current.bestTime, 
         config.topic, 
-        config.mode // Pass the mode for breakdown
+        config.mode,
+        isOnline // Save to separate Online Stats bucket
     );
     onGameEnd(players);
   }, [players, currentUser.id, onGameEnd, currentQuestionIndex, config.topic, config.mode, isOnline]);
 
   const proceedToNextQuestion = useCallback((forceGameOver = false) => {
-    const delay = isTimeAttack ? TIME_ATTACK_TRANSITION_MS : ((isSurvival) ? 1500 : RESULT_DURATION_MS);
+    // Reduced delay for Survival to match Time Attack speed if requested, but user said "don't wait for time".
+    // 1 second transition is good for immediate feedback without being abrupt.
+    const delay = (isTimeAttack || isSurvival) ? TIME_ATTACK_TRANSITION_MS : RESULT_DURATION_MS;
     
     nextQuestionTimeout.current = setTimeout(() => {
       if (forceGameOver) {
@@ -385,7 +389,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
             newStreak = 0;
         }
     } else {
-        // STANDARD RULES
+        // STANDARD RULES (Classic & Survival)
         if (isCorrect) {
           const difficultyMult = getDifficultyMultiplier(playerState.streak, currentDifficulty);
           const speedFactor = Math.max(0, 1 - (elapsedSeconds / 10)); 
@@ -401,27 +405,35 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     
     // Online Sync
     if (isOnline && socket.connected) {
-         const params = new URLSearchParams(window.location.search);
-         const roomFromUrl = params.get('room');
-         if (roomFromUrl) {
+         // Use explicitly passed roomId. URL parsing is unreliable for SPA updates.
+         if (roomId) {
              socket.emit('submit_answer', { 
-                 roomId: roomFromUrl, 
+                 roomId: roomId, 
                  answerIndex: optionIndex,
                  scoreToAdd: scoreToAdd 
              });
          }
     }
 
-    if (isTimeAttack) {
-        // For Time Attack, we reveal immediately and move on quickly
+    if (isTimeAttack || isSurvival) {
+        // For Time Attack AND Survival (Updated requirement), reveal immediately
         setPhase(GamePhase.ROUND_RESULT);
-        processRoundResults();
-        proceedToNextQuestion();
+        
+        // Check survival logic immediately
+        const survivalDeath = processRoundResults();
+        
+        if (isSurvival && survivalDeath) {
+            // Give a short delay to see the red X before Game Over
+            setTimeout(() => finishGame(), 1500);
+        } else {
+            proceedToNextQuestion();
+        }
     } else {
-        // For Classic/Survival, we wait for the question timer to end (handled by handleTimeUp)
+        // For Classic, we wait for the question timer to end (handled by handleTimeUp) or maybe show result if desired (but usually we wait in Classic)
+        // User only asked to change Survival waiting time. Classic remains standard quiz flow.
     }
     
-  }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isOnline, isTimeAttack, processRoundResults, proceedToNextQuestion]);
+  }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isOnline, isTimeAttack, isSurvival, processRoundResults, proceedToNextQuestion, roomId, finishGame]);
 
   const handleTimeUp = useCallback(() => {
     if (phase !== GamePhase.PLAYING) return;
@@ -547,12 +559,12 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
             })}
           </div>
 
-           {/* Loading bar for next question (Faster for Time Attack) */}
+           {/* Loading bar for next question (Faster for Time Attack AND Survival) */}
            {(phase === GamePhase.ROUND_RESULT) && (
              <div 
                 className="absolute bottom-0 left-0 h-1 bg-blue-500 w-full origin-left will-change-transform" 
                 style={{
-                  animation: `scaleX ${isTimeAttack ? TIME_ATTACK_TRANSITION_MS/1000 : ((isSurvival ? 0.8 : RESULT_DURATION_MS/1000))}s linear forwards`
+                  animation: `scaleX ${(isTimeAttack || isSurvival) ? TIME_ATTACK_TRANSITION_MS/1000 : RESULT_DURATION_MS/1000}s linear forwards`
                 }}
              />
           )}
@@ -564,8 +576,9 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
               key={isTimeAttack ? 'global-timer' : currentQuestionIndex}
               duration={isTimeAttack ? TIME_ATTACK_DURATION : QUESTION_DURATION} 
               onTimeUp={handleTimeUp} 
-              // In Time Attack, the timer ONLY stops if waiting for more questions (Loading)
-              // In Classic, it pauses during Result phase
+              // In Time Attack/Survival, timer stops if waiting for next batch.
+              // In Classic, timer pauses during Result phase. 
+              // For Survival, since we reveal immediately now, we pause if phase is RESULT.
               isRunning={isTimeAttack ? !isWaitingForMore : (phase === GamePhase.PLAYING && !isWaitingForMore)}
               isGlobal={isTimeAttack}
           />

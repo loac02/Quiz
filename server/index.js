@@ -18,12 +18,26 @@ const io = new Server(server, {
 // Game State Storage (In-memory for simplicity)
 const rooms = new Map();
 
+// Helper to generate clean Room IDs (No 0 or O)
+const generateRoomId = () => {
+  const chars = '123456789ABCDEFGHIJKLMNPQRSTUVWXYZ'; // Removed 0 and O
+  let result = '';
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+};
+
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
   // Create a Room
   socket.on('create_room', ({ player, config }) => {
-    const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    // Generate a unique clean ID
+    let roomId = generateRoomId();
+    while (rooms.has(roomId)) {
+        roomId = generateRoomId();
+    }
     
     rooms.set(roomId, {
       id: roomId,

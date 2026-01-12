@@ -7,7 +7,7 @@ import { socket } from '../services/socket';
 import { generateQuestions } from '../services/ai';
 
 interface LobbyProps {
-  onStartGame: (config: GameConfig, players?: Player[], questions?: Question[]) => void;
+  onStartGame: (config: GameConfig, players?: Player[], questions?: Question[], roomId?: string) => void;
   isLoading: boolean;
   currentUser: Player;
 }
@@ -82,12 +82,17 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
         setGameMode(config.mode);
     }
     function onGameStarted(data: any) {
-        onStartGame({
-            topic: data.config.topic,
-            difficulty: data.config.difficulty,
-            roundCount: 5, 
-            mode: data.config.mode
-        }, data.players, data.questions); 
+        onStartGame(
+            {
+                topic: data.config.topic,
+                difficulty: data.config.difficulty,
+                roundCount: 10, 
+                mode: data.config.mode
+            }, 
+            data.players, 
+            data.questions,
+            roomCode // Pass current room code if we have it (host or joiner who joined via lobby)
+        ); 
     }
     function onError(message: string) {
       alert(`Erro: ${message}`);
@@ -111,14 +116,15 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
       socket.off('game_started', onGameStarted);
       socket.off('error', onError);
     };
-  }, [lobbyMode, currentUser.name, onStartGame]);
+  }, [lobbyMode, currentUser.name, onStartGame, roomCode]);
 
   const handleStart = async () => {
     if (connectionMode === 'multiplayer') {
         if (!isHost) return; 
         setIsGeneratingOnline(true);
         try {
-            let questionCount = 5;
+            // Updated: Default to 10 for Classic/Survival in Online
+            let questionCount = 10;
             if (gameMode === GameMode.TIME_ATTACK) questionCount = 25;
 
             const generatedQuestions = await generateQuestions(

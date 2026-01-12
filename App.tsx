@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [players, setPlayers] = useState<Player[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [currentRoomId, setCurrentRoomId] = useState<string | undefined>(undefined);
   
   // Default Config
   const [gameConfig, setGameConfig] = useState<GameConfig>({
@@ -39,11 +40,12 @@ const App: React.FC = () => {
     setPhase(GamePhase.LOBBY);
   }, []);
 
-  // Updated Signature: accept preGeneratedQuestions
-  const handleStartGame = useCallback(async (config: GameConfig, initialPlayers?: Player[], preGeneratedQuestions?: Question[]) => {
+  // Updated Signature: accept preGeneratedQuestions AND roomId
+  const handleStartGame = useCallback(async (config: GameConfig, initialPlayers?: Player[], preGeneratedQuestions?: Question[], roomId?: string) => {
     setPhase(GamePhase.LOADING);
     setLoading(true); 
     setGameConfig(config);
+    setCurrentRoomId(roomId);
     
     // Set initial players
     if (initialPlayers && initialPlayers.length > 0) {
@@ -121,12 +123,14 @@ const App: React.FC = () => {
     setPhase(GamePhase.LOBBY);
     setQuestions([]);
     setPlayers([]);
+    setCurrentRoomId(undefined);
   }, []);
 
   const goToHome = useCallback(() => {
     setPhase(GamePhase.LOBBY);
     setQuestions([]);
     setPlayers([]);
+    setCurrentRoomId(undefined);
   }, []);
 
   const handleEditProfile = useCallback(() => {
@@ -200,6 +204,7 @@ const App: React.FC = () => {
               initialPlayers={players.length > 1 ? players : undefined} // Pass online players if any
               config={gameConfig}
               onLoadMore={handleLoadMoreQuestions}
+              roomId={currentRoomId}
             />
           )}
 
