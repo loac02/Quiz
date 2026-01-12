@@ -108,6 +108,9 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
   
   // Store pending update locally until Timer finishes
   const pendingAnswerUpdate = useRef<{ scoreToAdd: number, streak: number, correct: boolean } | null>(null);
+  
+  // Ref for Online Classic delayed emit
+  const pendingOnlineEmit = useRef<{ roomId: string, answerIndex: number, scoreToAdd: number } | null>(null);
 
   // Stats for this session
   const sessionStats = useRef({
@@ -173,6 +176,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
   useEffect(() => {
     questionStartTime.current = Date.now();
     pendingAnswerUpdate.current = null;
+    pendingOnlineEmit.current = null;
     setWasWrong(false); 
   }, [currentQuestionIndex]);
 
@@ -403,10 +407,18 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     // Staging the result
     pendingAnswerUpdate.current = { scoreToAdd, streak: newStreak, correct: isCorrect };
     
-    // Online Sync
-    if (isOnline && socket.connected) {
-         // Use explicitly passed roomId. URL parsing is unreliable for SPA updates.
-         if (roomId) {
+    // Online Sync Logic
+    if (isOnline && socket.connected && roomId) {
+         if (config.mode === GameMode.CLASSIC) {
+             // For Classic Mode: Do NOT emit immediately. Buffer it.
+             // This prevents the score from updating on the UI before the reveal (TimeUp).
+             pendingOnlineEmit.current = { 
+                 roomId: roomId, 
+                 answerIndex: optionIndex,
+                 scoreToAdd: scoreToAdd 
+             };
+         } else {
+             // For Time Attack/Survival: Emit Immediately for real-time feel
              socket.emit('submit_answer', { 
                  roomId: roomId, 
                  answerIndex: optionIndex,
@@ -429,11 +441,11 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
             proceedToNextQuestion();
         }
     } else {
-        // For Classic, we wait for the question timer to end (handled by handleTimeUp) or maybe show result if desired (but usually we wait in Classic)
-        // User only asked to change Survival waiting time. Classic remains standard quiz flow.
+        // For Classic, we wait for the question timer to end (handled by handleTimeUp)
+        // This is where the suspense is built.
     }
     
-  }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isOnline, isTimeAttack, isSurvival, processRoundResults, proceedToNextQuestion, roomId, finishGame]);
+  }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isOnline, isTimeAttack, isSurvival, processRoundResults, proceedToNextQuestion, roomId, finishGame, config.mode]);
 
   const handleTimeUp = useCallback(() => {
     if (phase !== GamePhase.PLAYING) return;
@@ -444,6 +456,12 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
       setPhase(GamePhase.GAME_OVER);
       finishGame();
       return;
+    }
+    
+    // For Classic Online: Now is the time to send the score!
+    if (isOnline && socket.connected && pendingOnlineEmit.current) {
+         socket.emit('submit_answer', pendingOnlineEmit.current);
+         pendingOnlineEmit.current = null;
     }
 
     // Reveal Phase (Classic / Survival)
@@ -456,7 +474,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     } else {
         proceedToNextQuestion();
     }
-  }, [phase, isTimeAttack, processRoundResults, proceedToNextQuestion, finishGame]);
+  }, [phase, isTimeAttack, processRoundResults, proceedToNextQuestion, finishGame, isOnline]);
 
   const currentQuestion = questions[currentQuestionIndex];
   if (!currentQuestion && !isWaitingForMore) return <div>Carregando...</div>;

@@ -130,6 +130,7 @@ io.on('connection', (socket) => {
 
     // Broadcast both the Questions AND the Final Config to ensure everyone plays the same game
     io.to(roomId).emit('game_started', { 
+        roomId: roomId, // CRITICAL: Send roomId back so clients know where to submit answers
         questions: room.questions, 
         players: room.players,
         config: room.config 

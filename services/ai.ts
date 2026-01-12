@@ -142,17 +142,15 @@ export const generateQuestions = async (
 
   } catch (error) {
     console.error("Failed to generate questions:", error);
-    // Minimal Fallback to keep game alive
-    return [
-      {
-        id: `fallback-${Date.now()}`,
-        text: "Quem é conhecido como 'O Rei do Futebol'?",
-        options: ["Maradona", "Pelé", "Messi", "Zico"],
-        correctAnswerIndex: 1,
-        category: "Futebol",
-        explanation: "Pelé venceu 3 Copas do Mundo.",
-        difficulty: Difficulty.ROOKIE
-      }
-    ];
+    // Robust Fallback (10 questions to ensure Classic Online playability)
+    return Array.from({ length: 10 }, (_, i) => ({
+      id: `fallback-${Date.now()}-${i}`,
+      text: i % 2 === 0 ? "Quem é conhecido como 'O Rei do Futebol'?" : "Qual país venceu a Copa do Mundo de 2002?",
+      options: i % 2 === 0 ? ["Maradona", "Pelé", "Messi", "Zico"] : ["Brasil", "Alemanha", "França", "Argentina"],
+      correctAnswerIndex: i % 2 === 0 ? 1 : 0,
+      category: "Futebol",
+      explanation: i % 2 === 0 ? "Pelé venceu 3 Copas do Mundo." : "Brasil venceu a Alemanha por 2x0.",
+      difficulty: Difficulty.ROOKIE
+    }));
   }
 };

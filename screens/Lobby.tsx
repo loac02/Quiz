@@ -82,6 +82,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
         setGameMode(config.mode);
     }
     function onGameStarted(data: any) {
+        // IMPORTANT: Use data.roomId from server to ensure Joiners have the correct ID
         onStartGame(
             {
                 topic: data.config.topic,
@@ -91,7 +92,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
             }, 
             data.players, 
             data.questions,
-            roomCode // Pass current room code if we have it (host or joiner who joined via lobby)
+            data.roomId || roomCode 
         ); 
     }
     function onError(message: string) {
