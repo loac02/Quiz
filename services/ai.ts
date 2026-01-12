@@ -76,22 +76,26 @@ export const generateQuestions = async (
       ? `IMPORTANTE: NÃO repita nem gere variações muito próximas das seguintes perguntas já feitas: [${avoidanceList}].`
       : "";
 
+    // Sanitize topic
+    const safeTopic = topic.trim();
+
     const prompt = `
     Você é um motor de jogo de Trivia Esportiva Competitiva (Sports Quiz Arena).
     
-    Tópico: "${topic}"
+    Tópico Principal: "${safeTopic}"
     Quantidade: ${count} perguntas
     ${difficultyContext}
     ${modeInstruction}
     ${avoidanceInstruction}
     
     Regras Estritas de Conteúdo:
-    1. Gere EXATAMENTE ${count} perguntas.
-    2. 4 opções de resposta por pergunta.
-    3. Responda EXCLUSIVAMENTE em Português do Brasil (PT-BR).
-    4. O campo 'difficulty' deve ser preenchido com: 'Novato', 'Profissional', 'Craque' ou 'Lenda', baseado na sua avaliação da pergunta gerada.
-    5. No campo 'explanation', dê um contexto educativo curto (máx 150 caracteres).
-    6. As perguntas devem ser factuais e livres de ambiguidade.
+    1. O tema é ESTRITAMENTE "${safeTopic}". Se for um esporte específico (ex: "Futebol"), NÃO gere perguntas sobre outros esportes (ex: Basquete, Vôlei). Se o tema for "Esportes Gerais", varie os esportes.
+    2. Gere EXATAMENTE ${count} perguntas.
+    3. 4 opções de resposta por pergunta.
+    4. Responda EXCLUSIVAMENTE em Português do Brasil (PT-BR).
+    5. O campo 'difficulty' deve ser preenchido com: 'Novato', 'Profissional', 'Craque' ou 'Lenda', baseado na sua avaliação da pergunta gerada.
+    6. No campo 'explanation', dê um contexto educativo curto (máx 150 caracteres).
+    7. As perguntas devem ser factuais e livres de ambiguidade.
     `;
 
     const response = await ai.models.generateContent({

@@ -235,12 +235,28 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
 
     setPlayers(currentPlayers => {
       return currentPlayers.map(p => {
-        // --- HUMAN PLAYER ---
-        if (!p.isBot) {
+        // Identify if this player 'p' is the user on this device
+        // In Online Mode, 'p.id' is the socket.id. In Solo, it's currentUser.id.
+        const isMe = isOnline ? (p.id === socket.id) : (p.id === currentUser.id);
+
+        // --- 1. CURRENT USER LOGIC ---
+        if (isMe) {
           const update = pendingAnswerUpdate.current;
           
           if (update) {
+            // Update stats ref (safe to do here as isMe is true for only 1 player)
             if (update.correct) sessionStats.current.correctCount++;
+            
+            // In Online Mode: Trust the server for Score/Streak to avoid double counting or race conditions.
+            // We only update visual flags locally (like lastAnswerCorrect).
+            if (isOnline) {
+                return {
+                    ...p,
+                    lastAnswerCorrect: update.correct
+                };
+            }
+
+            // In Solo Mode: Apply full score logic locally
             return {
               ...p,
               score: p.score + update.scoreToAdd,
@@ -249,68 +265,73 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
               lastAnswerCorrect: update.correct
             };
           } else {
+            // Timeout / No Answer
             return { ...p, streak: 0, lastAnswerCorrect: false };
           }
         }
 
-        // --- BOT LOGIC (Only if not online) ---
-        if (isOnline) return p; 
-        
-        const personality = BOT_PERSONALITIES[p.id] || BOT_PERSONALITIES['bot-3'];
-        let chance = personality.baseAccuracy + ((Math.random() * 0.10) - 0.05);
-        const isSpecialty = personality.specialties.some(s => category.toLowerCase().includes(s.toLowerCase()));
-        if (isSpecialty) chance += 0.25;
-        
-        const scoreDiff = humanScore - p.score;
-        if (scoreDiff > 300) chance += 0.15;
-        if (scoreDiff < -400) chance -= 0.10;
-        
-        chance = Math.min(0.98, Math.max(0.05, chance));
-        const isCorrect = Math.random() < chance;
+        // --- 2. BOT LOGIC (Solo/Host only) ---
+        // If we are online, we ignore bot logic (assuming pure PvP for now or handled by server if implemented)
+        if (!isOnline && p.isBot) {
+            const personality = BOT_PERSONALITIES[p.id] || BOT_PERSONALITIES['bot-3'];
+            let chance = personality.baseAccuracy + ((Math.random() * 0.10) - 0.05);
+            const isSpecialty = personality.specialties.some(s => category.toLowerCase().includes(s.toLowerCase()));
+            if (isSpecialty) chance += 0.25;
+            
+            const scoreDiff = humanScore - p.score;
+            if (scoreDiff > 300) chance += 0.15;
+            if (scoreDiff < -400) chance -= 0.10;
+            
+            chance = Math.min(0.98, Math.max(0.05, chance));
+            const isCorrect = Math.random() < chance;
 
-        if (isCorrect) {
-          const diffMult = getDifficultyMultiplier(p.streak, currentDifficulty);
-          let points = 0;
-          
-          // Bot logic for Time Attack: Simple +1
-          if (isTimeAttack) {
-             points = 1;
-          } else {
-             let timeBonus = 10;
-             points = Math.floor((BASE_POINTS + timeBonus) * diffMult); 
-          }
-          
-          return { 
-             ...p, score: p.score + points, streak: p.streak + 1, 
-             correctAnswersCount: (p.correctAnswersCount || 0) + 1, lastAnswerCorrect: true 
-          };
-        } else {
-          // Bot logic for Time Attack: -1 penalty ONLY if score > 0
-          let points = 0;
-          if (isTimeAttack) {
-             points = p.score > 0 ? -1 : 0;
-          }
-
-          return { ...p, score: p.score + points, streak: 0, lastAnswerCorrect: false };
+            if (isCorrect) {
+            const diffMult = getDifficultyMultiplier(p.streak, currentDifficulty);
+            let points = 0;
+            
+            if (isTimeAttack) {
+                points = 1;
+            } else {
+                let timeBonus = 10;
+                points = Math.floor((BASE_POINTS + timeBonus) * diffMult); 
+            }
+            
+            return { 
+                ...p, score: p.score + points, streak: p.streak + 1, 
+                correctAnswersCount: (p.correctAnswersCount || 0) + 1, lastAnswerCorrect: true 
+            };
+            } else {
+            let points = 0;
+            if (isTimeAttack) {
+                points = p.score > 0 ? -1 : 0;
+            }
+            return { ...p, score: p.score + points, streak: 0, lastAnswerCorrect: false };
+            }
         }
+
+        // --- 3. OTHER HUMAN PLAYERS (Online) ---
+        // Return them unchanged locally. Their scores are updated via the socket 'update_players' event.
+        return p; 
       });
     });
 
     return isGameOver;
-  }, [isSurvival, isTimeAttack, currentDifficulty, questions, currentQuestionIndex, players, isOnline]);
+  }, [isSurvival, isTimeAttack, currentDifficulty, questions, currentQuestionIndex, players, isOnline, currentUser.id]);
 
   const finishGame = useCallback(() => {
-    const player = players.find(p => p.id === currentUser.id) || players[0];
+    // Determine which player object represents the current user to save stats
+    const player = players.find(p => isOnline ? p.id === socket.id : p.id === currentUser.id) || players[0];
+    
     updateDetailedStats(
         player.score, 
         sessionStats.current.correctCount, 
         currentQuestionIndex + 1, 
         sessionStats.current.bestTime, 
-        config.topic,
+        config.topic, 
         config.mode // Pass the mode for breakdown
     );
     onGameEnd(players);
-  }, [players, currentUser.id, onGameEnd, currentQuestionIndex, config.topic, config.mode]);
+  }, [players, currentUser.id, onGameEnd, currentQuestionIndex, config.topic, config.mode, isOnline]);
 
   const proceedToNextQuestion = useCallback((forceGameOver = false) => {
     const delay = isTimeAttack ? TIME_ATTACK_TRANSITION_MS : ((isSurvival) ? 1500 : RESULT_DURATION_MS);
@@ -342,7 +363,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     
     const currentQuestion = questions[currentQuestionIndex];
     const isCorrect = optionIndex === currentQuestion.correctAnswerIndex;
-    const playerState = players.find(p => p.id === currentUser.id) || players[0];
+    const playerState = players.find(p => isOnline ? p.id === socket.id : p.id === currentUser.id) || players[0];
 
     const now = Date.now();
     const elapsedSeconds = (now - questionStartTime.current) / 1000;
@@ -393,14 +414,11 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
 
     if (isTimeAttack) {
         // For Time Attack, we reveal immediately and move on quickly
-        // We DO NOT wait for the question timer, but the Global Timer keeps running.
         setPhase(GamePhase.ROUND_RESULT);
         processRoundResults();
         proceedToNextQuestion();
     } else {
         // For Classic/Survival, we wait for the question timer to end (handled by handleTimeUp)
-        // or we could show a waiting state. Current request says: "wait for timer".
-        // The Timer component continues running and will trigger handleTimeUp when done.
     }
     
   }, [phase, selectedOption, questions, currentQuestionIndex, players, currentUser.id, currentDifficulty, isOnline, isTimeAttack, processRoundResults, proceedToNextQuestion]);
@@ -557,7 +575,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
       </div>
 
       <div className="lg:col-span-1 hidden lg:block h-full">
-        <Leaderboard players={players} currentUserId={currentUser.id} />
+        <Leaderboard players={players} currentUserId={isOnline ? socket.id || currentUser.id : currentUser.id} />
         <div className="mt-4 p-4 glass-panel rounded-xl text-center">
              <div className="text-blue-400 font-display font-bold text-lg flex items-center justify-center gap-2">
                 {isSurvival && <Skull className="w-4 h-4" />}
