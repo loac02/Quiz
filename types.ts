@@ -41,6 +41,7 @@ export interface Player {
   isBot: boolean;
   lastAnswerCorrect?: boolean;
   lastAnswerTime?: number; // ms
+  socketId?: string; // New field for connection tracking
 }
 
 export interface GameConfig {

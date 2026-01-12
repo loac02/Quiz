@@ -36,7 +36,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
 
   // Host Logic:
   // Is Host if Solo OR if Multiplayer and I am the first in the list.
-  const isHost = connectionMode === 'solo' || (playersInLobby.length > 0 && playersInLobby[0].id === socket.id);
+  // Using Stable ID matching
+  const isHost = connectionMode === 'solo' || (playersInLobby.length > 0 && playersInLobby[0].id === currentUser.id);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -55,14 +56,14 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
   useEffect(() => {
     // Only Host emits config updates to the room.
     if (connectionMode === 'multiplayer' && roomCode && playersInLobby.length > 0) {
-        if (playersInLobby[0].id === socket.id) {
+        if (playersInLobby[0].id === currentUser.id) {
             socket.emit('update_config', {
                 roomId: roomCode,
                 config: { topic, difficulty, mode: gameMode }
             });
         }
     }
-  }, [topic, difficulty, gameMode, connectionMode, roomCode, playersInLobby]);
+  }, [topic, difficulty, gameMode, connectionMode, roomCode, playersInLobby, currentUser.id]);
 
   useEffect(() => {
     function onConnect() { setIsConnected(true); }
@@ -73,7 +74,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
     }
     function onUpdatePlayers(players: any[]) {
       setPlayersInLobby(players);
-      const amIInList = players.some((p: any) => p.name === currentUser.name); 
+      // Determine if I am in the list by stable ID
+      const amIInList = players.some((p: any) => p.id === currentUser.id); 
       if (amIInList && lobbyMode !== 'waiting') setLobbyMode('waiting');
     }
     function onRoomConfigUpdated(config: GameConfig) {
@@ -98,6 +100,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
     function onError(message: string) {
       alert(`Erro: ${message}`);
       setLobbyMode('setup');
+      setIsGeneratingOnline(false); // Reset loading state on error
     }
 
     socket.on('connect', onConnect);
@@ -117,7 +120,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
       socket.off('game_started', onGameStarted);
       socket.off('error', onError);
     };
-  }, [lobbyMode, currentUser.name, onStartGame, roomCode]);
+  }, [lobbyMode, currentUser.name, currentUser.id, onStartGame, roomCode]);
 
   const handleStart = async () => {
     if (connectionMode === 'multiplayer') {
@@ -135,7 +138,16 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
                 gameMode,
                 []
             );
-            socket.emit('start_game', { roomId: roomCode, questions: generatedQuestions });
+            
+            // Use socket callback to handle server rejection (e.g. lost host privileges)
+            socket.emit('start_game', { roomId: roomCode, questions: generatedQuestions }, (response: any) => {
+                if (response && response.error) {
+                    alert(`Erro ao iniciar: ${response.error}`);
+                    setIsGeneratingOnline(false);
+                }
+                // If success, 'game_started' event will handle the transition
+            });
+
         } catch (error) {
             console.error("Failed to generate online questions", error);
             alert("Erro ao gerar perguntas. Tente novamente.");
@@ -164,7 +176,9 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
     if (!cleanCode) return;
     if (!socket.connected) socket.connect();
     setRoomCode(cleanCode); 
-    if (playersInLobby.some(p => p.name === currentUser.name)) return;
+    // Logic: Avoid re-emitting if already in list
+    if (playersInLobby.some(p => p.id === currentUser.id)) return;
+    
     socket.emit('join_room', {
       roomId: cleanCode,
       player: { name: currentUser.name, avatar: currentUser.avatar, id: currentUser.id }
@@ -358,7 +372,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onStartGame, isLoading, currentUse
                  <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
                     {playersInLobby.map((p, idx) => (
                       <div key={idx} className="flex items-center gap-3 bg-slate-800/60 p-3 rounded-lg border border-green-500/30 animate-slide-up">
-                         <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"/>
+                         <div className={`w-2 h-2 ${p.id === currentUser.id ? 'bg-yellow-500' : 'bg-green-500'} rounded-full animate-pulse`}/>
                          <img src={p.avatar || "https://picsum.photos/100/100"} className="w-8 h-8 rounded-full" alt="User" />
                          <span className="font-bold">{p.name || `Jogador ${idx+1}`}</span>
                          {idx === 0 && <span className="text-xs bg-blue-900 px-2 py-0.5 rounded text-blue-300">HOST</span>}

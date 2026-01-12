@@ -105,8 +105,11 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
   // Logic Refs
   const questionStartTime = useRef<number>(Date.now());
   const nextQuestionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Refs for Online Sync Robustness
   const pendingAnswerUpdate = useRef<{ scoreToAdd: number, streak: number, correct: boolean } | null>(null);
   const pendingOnlineEmitTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingOnlinePayload = useRef<{ roomId: string, answerIndex: number, scoreToAdd: number } | null>(null);
 
   // Stats for this session
   const sessionStats = useRef({
@@ -160,6 +163,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
   useEffect(() => {
     questionStartTime.current = Date.now();
     pendingAnswerUpdate.current = null;
+    pendingOnlinePayload.current = null; // Clear online payload for new question
     if (pendingOnlineEmitTimeout.current) clearTimeout(pendingOnlineEmitTimeout.current);
     setWasWrong(false); 
   }, [currentQuestionIndex]);
@@ -224,13 +228,18 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
 
     setPlayers(currentPlayers => {
       return currentPlayers.map(p => {
-        const isMe = isOnline ? (p.id === socket.id) : (p.id === currentUser.id);
+        // --- STABLE ID CHECK ---
+        // Use the original ID (from currentUser) instead of socket.id
+        // This ensures that even if socket reconnects, the player is identified correctly.
+        const isMe = p.id === currentUser.id;
 
         if (isMe) {
           const update = pendingAnswerUpdate.current;
           if (update) {
             if (update.correct) sessionStats.current.correctCount++;
             if (isOnline) {
+                // In Online, we mostly rely on server for score, but local optimistic update
+                // helps visual feedback. However, we set correct status here.
                 return { ...p, lastAnswerCorrect: update.correct };
             }
             return {
@@ -275,7 +284,8 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
   }, [isSurvival, isTimeAttack, currentDifficulty, questions, currentQuestionIndex, players, isOnline, currentUser.id]);
 
   const finishGame = useCallback(() => {
-    const player = players.find(p => isOnline ? p.id === socket.id : p.id === currentUser.id) || players[0];
+    // Identify current player by Stable ID
+    const player = players.find(p => p.id === currentUser.id) || players[0];
     updateDetailedStats(
         player.score, 
         sessionStats.current.correctCount, 
@@ -317,7 +327,8 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     
     const currentQuestion = questions[currentQuestionIndex];
     const isCorrect = optionIndex === currentQuestion.correctAnswerIndex;
-    const playerState = players.find(p => isOnline ? p.id === socket.id : p.id === currentUser.id) || players[0];
+    // Stable ID identification
+    const playerState = players.find(p => p.id === currentUser.id) || players[0];
 
     const now = Date.now();
     const elapsedSeconds = (now - questionStartTime.current) / 1000;
@@ -354,14 +365,23 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
          if (config.mode === GameMode.CLASSIC) {
              // DELAYED EMIT STRATEGY
              const remainingTimeMs = Math.max(0, (QUESTION_DURATION * 1000) - (now - questionStartTime.current));
+             const payload = { 
+                roomId: roomId, 
+                answerIndex: optionIndex, 
+                scoreToAdd: scoreToAdd 
+             };
              
+             // Store payload for handleTimeUp fallback
+             pendingOnlinePayload.current = payload;
+             
+             // Schedule emit
              pendingOnlineEmitTimeout.current = setTimeout(() => {
-                 socket.emit('submit_answer', { 
-                     roomId: roomId, 
-                     answerIndex: optionIndex,
-                     scoreToAdd: scoreToAdd 
-                 });
+                 if (pendingOnlinePayload.current) {
+                    socket.emit('submit_answer', pendingOnlinePayload.current);
+                    pendingOnlinePayload.current = null;
+                 }
              }, remainingTimeMs);
+
          } else {
              // Time Attack / Survival: Emit Immediately
              socket.emit('submit_answer', { 
@@ -395,6 +415,12 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
       return;
     }
 
+    // --- FAILSAFE FOR ONLINE EMIT ---
+    if (isOnline && socket.connected && pendingOnlinePayload.current) {
+         socket.emit('submit_answer', pendingOnlinePayload.current);
+         pendingOnlinePayload.current = null;
+    }
+
     setPhase(GamePhase.ROUND_RESULT);
     const survivalDeath = processRoundResults();
     
@@ -403,7 +429,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
     } else {
         proceedToNextQuestion();
     }
-  }, [phase, isTimeAttack, processRoundResults, proceedToNextQuestion, finishGame]);
+  }, [phase, isTimeAttack, processRoundResults, proceedToNextQuestion, finishGame, isOnline]);
 
   const currentQuestion = questions[currentQuestionIndex];
   if (!currentQuestion && !isWaitingForMore) return <div>Carregando...</div>;
@@ -533,7 +559,7 @@ export const Arena: React.FC<ArenaProps> = ({ questions, onGameEnd, currentUser,
       </div>
 
       <div className="lg:col-span-1 hidden lg:block h-full">
-        <Leaderboard players={players} currentUserId={isOnline ? socket.id || currentUser.id : currentUser.id} />
+        <Leaderboard players={players} currentUserId={currentUser.id} />
         <div className="mt-4 p-4 glass-panel rounded-xl text-center">
              <div className="text-blue-400 font-display font-bold text-lg flex items-center justify-center gap-2">
                 {isSurvival && <Skull className="w-4 h-4" />}

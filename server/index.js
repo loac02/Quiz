@@ -39,10 +39,11 @@ io.on('connection', (socket) => {
         roomId = generateRoomId();
     }
     
+    // IMPORTANT: We store socketId separately and KEEP the original player.id (stable)
     rooms.set(roomId, {
       id: roomId,
-      hostId: socket.id,
-      players: [{ ...player, id: socket.id, score: 0, streak: 0 }],
+      hostId: socket.id, // Host connection ID
+      players: [{ ...player, socketId: socket.id, score: 0, streak: 0 }],
       config: config,
       phase: 'LOBBY',
       questions: []
@@ -53,7 +54,7 @@ io.on('connection', (socket) => {
     // Emit initial players AND config
     io.to(roomId).emit('update_players', rooms.get(roomId).players);
     io.to(roomId).emit('room_config_updated', config);
-    console.log(`Room ${roomId} created by ${player.name}`);
+    console.log(`Room ${roomId} created by ${player.name} (ID: ${player.id})`);
   });
 
   // Join a Room
@@ -66,26 +67,61 @@ io.on('connection', (socket) => {
     }
 
     if (room.phase !== 'LOBBY') {
-      socket.emit('error', 'O jogo já começou');
-      return;
+      // Allow rejoin if player ID matches an existing one
+      const existingInGame = room.players.find(p => p.id === player.id);
+      if (!existingInGame) {
+          socket.emit('error', 'O jogo já começou');
+          return;
+      }
     }
 
     if (room.players.length >= 8) {
-      socket.emit('error', 'Sala cheia');
-      return;
+       // Allow rejoin even if full (it's the same slot)
+       const existingInGame = room.players.find(p => p.id === player.id);
+       if (!existingInGame) {
+          socket.emit('error', 'Sala cheia');
+          return;
+       }
     }
 
-    // Prevent Duplicates
-    const existingPlayerIndex = room.players.findIndex(p => p.id === socket.id || p.name === player.name);
+    // Duplicate/Rejoin Logic using STABLE ID
+    const existingPlayerIndex = room.players.findIndex(p => p.id === player.id);
+    
     if (existingPlayerIndex !== -1) {
-      if (room.players[existingPlayerIndex].id === socket.id) {
-         return;
+      const existingPlayer = room.players[existingPlayerIndex];
+      
+      console.log(`Player rejoin detected: ${player.name} (Old Socket: ${existingPlayer.socketId} -> New: ${socket.id})`);
+      
+      // CRITICAL FIX: If this player was the host (checked by old socketId OR if they are the first player), 
+      // transfer host privileges to the new socket connection.
+      if (room.hostId === existingPlayer.socketId || existingPlayerIndex === 0) {
+          console.log(`Transferring Host privileges in Room ${roomId} to ${socket.id}`);
+          room.hostId = socket.id;
       }
-      socket.emit('error', 'Você já está nesta sala ou o nome já está em uso.');
+
+      // Update the transport ID (socketId)
+      room.players[existingPlayerIndex].socketId = socket.id;
+      
+      socket.join(roomId);
+      
+      // Update client with current state
+      io.to(roomId).emit('update_players', room.players);
+      socket.emit('room_config_updated', room.config);
+      
+      if (room.phase === 'PLAYING') {
+          // Send game state to reconnecting player
+          socket.emit('game_started', { 
+              roomId: roomId, 
+              questions: room.questions, 
+              players: room.players,
+              config: room.config 
+          });
+      }
       return;
     }
 
-    room.players.push({ ...player, id: socket.id, score: 0, streak: 0 });
+    // New Player
+    room.players.push({ ...player, socketId: socket.id, score: 0, streak: 0 });
     socket.join(roomId);
     
     // Broadcast players update
@@ -102,48 +138,60 @@ io.on('connection', (socket) => {
       const room = rooms.get(roomId);
       if (!room) return;
       
-      // SECURITY CHECK: Only the first player (Host) can update config
-      // This prevents joiners from accidentally overwriting the host's settings
-      if (room.players.length > 0 && room.players[0].id !== socket.id) {
-         return; 
+      // Check if sender is host by socketId
+      if (room.hostId !== socket.id) {
+          return; 
       }
       
-      // Update server state
       room.config = config;
-      
-      // Broadcast to everyone else in room
       socket.to(roomId).emit('room_config_updated', config);
   });
 
   // Start Game
-  socket.on('start_game', async ({ roomId, questions }) => {
+  // Added 'callback' parameter to confirm receipt to client
+  socket.on('start_game', async ({ roomId, questions }, callback) => {
     const room = rooms.get(roomId);
-    if (!room) return;
+    if (!room) {
+        if (callback) callback({ error: 'Sala não encontrada' });
+        return;
+    }
     
-    // Only Host can start (double check)
-    // Using hostId or index 0
-    if (room.players.length > 0 && room.players[0].id !== socket.id) return;
+    // Only Host can start
+    if (room.hostId !== socket.id) {
+        console.warn(`Unauthorized start attempt by ${socket.id} in room ${roomId} (Host is ${room.hostId})`);
+        if (callback) callback({ error: 'Apenas o Host pode iniciar o jogo' });
+        return;
+    }
 
     room.questions = questions; 
     room.currentQuestionIndex = 0;
     room.phase = 'PLAYING';
 
-    // Broadcast both the Questions AND the Final Config to ensure everyone plays the same game
     io.to(roomId).emit('game_started', { 
-        roomId: roomId, // CRITICAL: Send roomId back so clients know where to submit answers
+        roomId: roomId, 
         questions: room.questions, 
         players: room.players,
         config: room.config 
     });
+
+    if (callback) callback({ success: true });
   });
 
   // Handle Answer
   socket.on('submit_answer', ({ roomId, answerIndex, scoreToAdd }) => {
     const room = rooms.get(roomId);
-    if (!room) return;
+    if (!room) {
+        return;
+    }
 
-    const player = room.players.find(p => p.id === socket.id);
-    if (!player) return;
+    // Find player by Socket ID (Transport)
+    const player = room.players.find(p => p.socketId === socket.id);
+    
+    if (!player) {
+        return;
+    }
+
+    console.log(`Score update for ${player.name}: +${scoreToAdd} (Streak: ${player.streak})`);
 
     player.score += scoreToAdd;
     if (scoreToAdd > 0) {
@@ -159,18 +207,20 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
     rooms.forEach((room, roomId) => {
-      const index = room.players.findIndex(p => p.id === socket.id);
+      const index = room.players.findIndex(p => p.socketId === socket.id);
       if (index !== -1) {
-        room.players.splice(index, 1);
-        io.to(roomId).emit('update_players', room.players);
+        // We DO NOT remove the player immediately on disconnect to allow refresh/reconnect.
+        // If it's the host, we might need to migrate host, but for now we keep it simple.
         
-        // If Host leaves, maybe assign new host? For now, if empty delete.
-        if (room.players.length === 0) {
-          rooms.delete(roomId);
-        } else if (socket.id === room.hostId) {
-            // Assign new host to next player
-            room.hostId = room.players[0].id;
-            // Optionally notify clients of new host, but currently UI infers host from list index 0
+        if (room.phase === 'LOBBY') {
+             room.players.splice(index, 1);
+             io.to(roomId).emit('update_players', room.players);
+             if (room.players.length === 0) {
+                rooms.delete(roomId);
+             } else if (room.hostId === socket.id) {
+                 // Pass host to next player if lobby
+                 room.hostId = room.players[0].socketId;
+             }
         }
       }
     });
